@@ -97,6 +97,24 @@ def _mosaico(miniaturas: list[Image.Image], largura: int, altura: int,
     return imagens.montar_mosaico(miniaturas, largura, altura, paleta)
 
 
+def gerar_mosaico_editorial(items: list[Image.Image], width: int, height: int,
+                            palette: tema.Paleta) -> Capa:
+    """Render a crop-to-fill cover mosaic with a calm, solid title field.
+
+    Unlike internal pages, cover cells may crop.  The reserved field is kept
+    untextured so title rendering needs no decorative mask or contrast guess.
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError("Cover dimensions must be positive")
+    anchor = 0.72
+    mosaic_height = max(1, round(height * 0.66))
+    canvas = Image.new("RGB", (width, height), palette.fundo_rgb)
+    if items:
+        mosaic = imagens.montar_mosaico(items, width, mosaic_height, palette)
+        canvas.paste(mosaic, (0, 0))
+    return Capa(canvas, anchor)
+
+
 def _losango(miniaturas: list[Image.Image], largura: int, altura: int,
              paleta: tema.Paleta) -> Image.Image:
     centros, passo_x, passo_y = _malha_losangos(len(miniaturas), largura, altura)
@@ -143,5 +161,4 @@ def gerar(estilo: str, miniaturas: list[Image.Image], largura: int, altura: int,
     if estilo == "destaque":
         heroi = miniaturas[len(miniaturas) // 2]
         return Capa(_destaque(miniaturas, largura, altura, heroi, paleta), 0.62)
-    return Capa(imagens.veu_para_texto(_mosaico(miniaturas, largura, altura, paleta),
-                                       paleta), 0.34)
+    return gerar_mosaico_editorial(miniaturas, largura, altura, paleta)
