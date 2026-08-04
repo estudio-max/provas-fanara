@@ -7,7 +7,10 @@ deliberadamente Windows-only: o PyInstaller não faz compilação cruzada.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -15,6 +18,7 @@ import sys
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 NOME = "Fotolivro"
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
+MANIFESTO = "BUILD-MANIFEST.json"
 
 LEIAME_WINDOWS = """FOTOLIVRO — PDF editorial a partir da pasta do ensaio
 
@@ -92,6 +96,53 @@ def compactar(alvo: str, destino_zip: str) -> str:
     return shutil.make_archive(os.path.splitext(destino_zip)[0], "zip", os.path.dirname(alvo), os.path.basename(alvo))
 
 
+def _fontes_do_pacote() -> tuple[Path, ...]:
+    root = Path(RAIZ)
+    fixed = tuple(
+        root / name for name in (
+            "pyproject.toml", "provas_cli.py", "Provas.pyw", "verificar.py", "empacotar.py",
+        )
+    )
+    package = tuple(path for path in (root / "provas").rglob("*") if path.suffix in {".py", ".qss"})
+    return tuple(sorted((*fixed, *package), key=lambda path: path.relative_to(root).as_posix()))
+
+
+def fingerprint_fontes() -> str:
+    """Hash every source file that can affect the frozen executable."""
+    digest = hashlib.sha256()
+    root = Path(RAIZ)
+    for path in _fontes_do_pacote():
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        data = path.read_bytes()
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def commit_atual() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=RAIZ, text=True, capture_output=True, check=True,
+    )
+    return completed.stdout.strip()
+
+
+def escrever_manifesto(alvo: str) -> None:
+    executable = Path(alvo, f"{NOME}.exe")
+    Path(alvo, MANIFESTO).write_text(
+        json.dumps(
+            {
+                "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                "git_commit": commit_atual(),
+                "source_sha256": fingerprint_fontes(),
+            },
+            ensure_ascii=False, indent=2, sort_keys=True,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     if sys.platform != "win32":
         print("Este empacotador gera somente o pacote Windows; execute-o no Windows.")
@@ -137,6 +188,7 @@ def main() -> int:
 
     alvo = os.path.join(RAIZ, "dist", NOME)
     remover_dados_usuario(alvo)
+    escrever_manifesto(alvo)
     leiame = os.path.join(alvo, "LEIA-ME.txt")
     with open(leiame, "w", encoding="utf-8") as arquivo:
         arquivo.write(LEIAME_WINDOWS)

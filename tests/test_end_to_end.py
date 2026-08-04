@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -74,6 +77,82 @@ def _render_at_width(page: pymupdf.Page, width: int) -> Image.Image:
     return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
 
 
+def _assert_image_sequence_identity(actual: list[Image.Image], expected: list[Image.Image]) -> None:
+    assert len(actual) == len(expected), "identidade: quantidade de streams divergente"
+    for index, (actual_image, expected_image) in enumerate(zip(actual, expected)):
+        distance = _visual_distance(actual_image, expected_image)
+        alternatives = [_visual_distance(actual_image, candidate) for candidate in expected]
+        assert distance <= 0.045 and distance <= min(alternatives) + 0.004, (
+            f"identidade: stream {index} não corresponde à foto planejada "
+            f"(distância perceptual {distance:.4f}, melhor alternativa {min(alternatives):.4f})"
+        )
+
+
+def _assert_mode_rendering(source: Image.Image, proof: Image.Image, clean: Image.Image) -> None:
+    clean_distance = _visual_distance(source, clean)
+    proof_distance = _visual_distance(source, proof)
+    mode_distance = _visual_distance(proof, clean)
+    assert clean_distance <= 0.045, (
+        f"modo limpo alterou pixels além da recompressão esperada ({clean_distance:.4f})"
+    )
+    assert mode_distance >= 0.001 and proof_distance >= clean_distance + 0.0005, (
+        "marca: prova não difere do limpo pela marca d'água esperada "
+        f"(prova/limpo={mode_distance:.4f}, prova/fonte={proof_distance:.4f})"
+    )
+
+
+def _visual_distance(left: Image.Image, right: Image.Image) -> float:
+    """RMS perceptual distance, robust to dimensions, JPEG noise and alpha."""
+    normalized = []
+    for source in (left, right):
+        rgba = source.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, "white")
+        background.alpha_composite(rgba)
+        rgb = background.convert("RGB").resize((48, 48), Image.Resampling.LANCZOS)
+        normalized.append(tuple(rgb.get_flattened_data()))
+        rgba.close()
+        background.close()
+        rgb.close()
+    squared = sum(
+        (a_channel - b_channel) ** 2
+        for a_pixel, b_pixel in zip(*normalized)
+        for a_channel, b_channel in zip(a_pixel, b_pixel)
+    )
+    return math.sqrt(squared / (48 * 48 * 3)) / 255
+
+
+def _pdf_images(pdf: pymupdf.Document, page_index: int) -> list[Image.Image]:
+    images = []
+    for entry in pdf[page_index].get_images(full=True):
+        stream = pdf.extract_image(entry[0])["image"]
+        with Image.open(io.BytesIO(stream)) as decoded:
+            images.append(decoded.convert("RGB"))
+    return images
+
+
+@pytest.fixture(scope="session")
+def built_package() -> Path:
+    from empacotar import commit_atual, fingerprint_fontes
+
+    package = ROOT / "dist" / "Fotolivro-Windows.zip"
+    current = {"git_commit": commit_atual(), "source_sha256": fingerprint_fontes()}
+    manifest = None
+    if package.is_file():
+        try:
+            with zipfile.ZipFile(package) as archive:
+                manifest = json.loads(archive.read("Fotolivro/BUILD-MANIFEST.json"))
+        except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+            manifest = None
+    if not isinstance(manifest, dict) or any(manifest.get(key) != value for key, value in current.items()):
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "empacotar.py")],
+            cwd=ROOT, capture_output=True, text=True, timeout=240, check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert package.is_file()
+    return package
+
+
 @pytest.mark.parametrize(("case_name", "total", "orientation", "seed"), CASES)
 @pytest.mark.parametrize("mode", ("prova", "fotolivro"))
 def test_complete_editorial_pipeline_is_deterministic_and_visually_coherent(
@@ -130,6 +209,7 @@ def test_complete_editorial_pipeline_is_deterministic_and_visually_coherent(
     assert longest_dense_run <= 2
 
     by_id = {photo.id: photo for photo in analysis.photos}
+    expected_assets, _ = motor._prepare_render_assets(config.com_padroes(), analysis.plan)
     with pymupdf.open(output) as pdf:
         assert pdf.page_count == len(analysis.plan.pages) + 1 == len(preview)
         assert result.paginas == len(analysis.plan.pages)
@@ -153,6 +233,16 @@ def test_complete_editorial_pipeline_is_deterministic_and_visually_coherent(
             for photo_id in page_plan.photo_ids:
                 prefix = Path(photo_id).stem[:18]
                 assert (prefix in text) is (mode == "prova")
+            actual_images = _pdf_images(pdf, pdf_page.number)
+            expected_images = []
+            try:
+                for photo_id in page_plan.photo_ids:
+                    with Image.open(io.BytesIO(expected_assets[photo_id].jpeg)) as expected:
+                        expected_images.append(expected.convert("RGB"))
+                _assert_image_sequence_identity(actual_images, expected_images)
+            finally:
+                for image in (*actual_images, *expected_images):
+                    image.close()
 
     assert output.exists() and output.stat().st_size > 0
 
@@ -180,9 +270,10 @@ def test_manual_cover_replacement_survives_preview_and_export(tmp_path: Path):
             cover.close()
 
 
-def test_packaged_executable_generates_both_modes_outside_source_tree(tmp_path: Path):
-    package = ROOT / "dist" / "Fotolivro-Windows.zip"
-    assert package.is_file(), "gere dist/Fotolivro-Windows.zip antes da gate E2E"
+def test_packaged_executable_generates_both_modes_outside_source_tree(
+    tmp_path: Path, built_package: Path,
+):
+    package = built_package
     extracted = tmp_path / "pacote-extraido"
     with zipfile.ZipFile(package) as archive:
         archive.extractall(extracted)
@@ -192,8 +283,11 @@ def test_packaged_executable_generates_both_modes_outside_source_tree(tmp_path: 
     clean_environment = os.environ.copy()
     clean_environment["PYTHONPATH"] = ""
     clean_environment["PYTHONNOUSERSITE"] = "1"
+    outputs = {}
+    package_qa = VISUAL_QA / "packaged"
+    package_qa.mkdir(parents=True, exist_ok=True)
     for mode in ("prova", "fotolivro"):
-        output = tmp_path / f"pacote-{mode}.pdf"
+        output = package_qa / f"{mode}.pdf"
         completed = subprocess.run(
             [
                 str(executable), str(session), "--modo", mode, "--semente", "77",
@@ -207,9 +301,35 @@ def test_packaged_executable_generates_both_modes_outside_source_tree(tmp_path: 
         )
         assert completed.returncode == 0
         assert output.is_file()
+        outputs[mode] = output
         with pymupdf.open(output) as pdf:
             assert pdf.page_count >= 2
-            assert all(page.rect.width > page.rect.height for page in pdf)
+            assert all(
+                (page.rect.width, page.rect.height) == pytest.approx(A4_LANDSCAPE, abs=0.2)
+                for page in pdf
+            )
+
+    local = motor.analisar_plano(motor.Config(str(session), modo="fotolivro", semente=77))
+    by_id = {photo.id: photo for photo in local.photos}
+    with pymupdf.open(outputs["prova"]) as proof_pdf, pymupdf.open(outputs["fotolivro"]) as clean_pdf:
+        assert proof_pdf.page_count == clean_pdf.page_count == len(local.plan.pages) + 1
+        for page_index, page_plan in enumerate(local.plan.pages, start=1):
+            proof_images = _pdf_images(proof_pdf, page_index)
+            clean_images = _pdf_images(clean_pdf, page_index)
+            try:
+                assert len(proof_images) == len(clean_images) == len(page_plan.photo_ids)
+                for proof, clean, photo_id in zip(proof_images, clean_images, page_plan.photo_ids):
+                    with Image.open(by_id[photo_id].path) as source:
+                        _assert_mode_rendering(source, proof, clean)
+                proof_text = proof_pdf[page_index].get_text()
+                clean_text = clean_pdf[page_index].get_text()
+                for photo_id in page_plan.photo_ids:
+                    prefix = Path(photo_id).stem[:10]
+                    assert prefix in proof_text
+                    assert prefix not in clean_text
+            finally:
+                for image in (*proof_images, *clean_images):
+                    image.close()
 
 
 def test_visual_baselines_document_the_approved_cases_and_seeds():
@@ -223,3 +343,65 @@ def test_visual_baselines_document_the_approved_cases_and_seeds():
         assert str(seed) in text
     assert "prova" in text.lower()
     assert "fotolivro" in text.lower()
+
+
+def test_visual_identity_guard_rejects_repeated_same_orientation_image():
+    expected = [Image.new("RGB", (400, 600), color) for color in ((220, 40, 40), (40, 80, 220))]
+    actual = [expected[0].copy(), expected[0].copy()]
+    try:
+        with pytest.raises(AssertionError, match="identidade"):
+            _assert_image_sequence_identity(actual, expected)
+    finally:
+        for image in (*expected, *actual):
+            image.close()
+
+
+def test_mode_guard_rejects_proof_without_watermark():
+    source = Image.new("RGB", (600, 400), (70, 90, 120))
+    clean = source.copy()
+    proof_without_watermark = source.copy()
+    try:
+        with pytest.raises(AssertionError, match="marca"):
+            _assert_mode_rendering(source, proof_without_watermark, clean)
+    finally:
+        source.close()
+        clean.close()
+        proof_without_watermark.close()
+
+
+def test_packaged_zip_contains_verifiable_source_manifest(built_package: Path):
+    from empacotar import commit_atual, fingerprint_fontes
+
+    package = built_package
+
+    with zipfile.ZipFile(package) as archive:
+        manifest = json.loads(archive.read("Fotolivro/BUILD-MANIFEST.json"))
+        executable_sha256 = hashlib.sha256(archive.read("Fotolivro/Fotolivro.exe")).hexdigest()
+
+    assert manifest["source_sha256"] == fingerprint_fontes()
+    assert manifest["git_commit"] == commit_atual()
+    assert manifest["executable_sha256"] == executable_sha256
+
+
+def test_visual_qa_helper_renders_pages_at_120_dpi_and_contact_sheet(tmp_path: Path):
+    case = tmp_path / "caso"
+    case.mkdir()
+    pdf_path = case / "prova.pdf"
+    document = pymupdf.open()
+    document.new_page(width=A4_LANDSCAPE[0], height=A4_LANDSCAPE[1])
+    document.save(pdf_path)
+    document.close()
+
+    completed = subprocess.run(
+        [sys.executable, str(ROOT / "tests" / "visual_qa.py"), str(tmp_path)],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    page = case / "prova" / "page-001.png"
+    contact_sheet = case / "prova-contact-sheet.png"
+    assert page.is_file()
+    assert contact_sheet.is_file()
+    with Image.open(page) as rendered:
+        assert rendered.size == pytest.approx((1403, 992), abs=1)
+    assert " / página " not in (ROOT / "tests" / "visual_qa.py").read_text(encoding="utf-8")
