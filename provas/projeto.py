@@ -28,6 +28,55 @@ class ProjectSchemaError(ValueError):
 
 
 @dataclass(frozen=True)
+class ProjectConfig:
+    """Immutable project-safe snapshot of the mutable rendering configuration."""
+
+    pasta: str
+    saida: str = ""
+    titulo: str = ""
+    subtitulo: str = ""
+    por_pagina: int = 4
+    paisagem: bool = False
+    girar_horizontais: bool = True
+    qualidade: str = "normal"
+    marca_dagua: bool = True
+    mostrar_codigos: bool = True
+    marca_opacidade: float = 0.20
+    marca_largura: float = 0.62
+    logo: str = ""
+    estudio: str = ""
+    site: str = ""
+    cor_fundo: str = "#F6F0E8"
+    recursivo: bool = False
+    capa_mosaico: bool = True
+    estilo_capa: str = "mosaico"
+    chamada: str = "Escolha suas favoritas"
+    limite: int = 0
+    modo: str = "prova"
+    semente: int = 0
+    cover_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "cover_ids", tuple(self.cover_ids))
+
+    @classmethod
+    def from_motor_config(cls, config: Config) -> "ProjectConfig":
+        """Copy every serializable field from the app's mutable config."""
+        return cls(**asdict(config))
+
+    @classmethod
+    def from_data(cls, data: Mapping[str, object]) -> "ProjectConfig":
+        return cls(**dict(data))
+
+    def to_motor_config(self) -> Config:
+        """Create a fresh mutable config for a rendering/composition boundary."""
+        return Config(**asdict(self))
+
+    def to_data(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ProjectState:
     """All serializable state needed to reopen an editorial project.
 
@@ -36,13 +85,17 @@ class ProjectState:
     source folder never makes loading the metadata fail.
     """
 
-    config: Config
+    config: ProjectConfig
     plan: BookPlan
     photo_paths: tuple[str, ...] = ()
     cache_keys: tuple[str, ...] = ()
     previous_plan: BookPlan | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.config, Config):
+            object.__setattr__(self, "config", ProjectConfig.from_motor_config(self.config))
+        elif not isinstance(self.config, ProjectConfig):
+            raise TypeError("config deve ser uma Config ou ProjectConfig")
         object.__setattr__(self, "photo_paths", tuple(self.photo_paths))
         object.__setattr__(self, "cache_keys", tuple(self.cache_keys))
 
@@ -104,7 +157,7 @@ def _plan_from_data(data: object) -> BookPlan:
 def _state_to_data(state: ProjectState) -> dict[str, object]:
     return {
         "schema_version": PROJECT_SCHEMA_VERSION,
-        "config": asdict(state.config),
+        "config": state.config.to_data(),
         "photo_paths": list(state.photo_paths),
         "cache_keys": list(state.cache_keys),
         "plan": _plan_to_data(state.plan),
@@ -126,7 +179,7 @@ def _state_from_data(data: object) -> ProjectState:
         cache_keys = tuple(str(key) for key in data.get("cache_keys", ()))
         previous_data = data.get("previous_plan")
         return ProjectState(
-            Config(**config_data), _plan_from_data(data["plan"]), photo_paths, cache_keys,
+            ProjectConfig.from_data(config_data), _plan_from_data(data["plan"]), photo_paths, cache_keys,
             _plan_from_data(previous_data) if previous_data is not None else None,
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -182,7 +235,8 @@ def regenerate(state: ProjectState, photos: Iterable[PhotoInfo]) -> ProjectState
     items = tuple(photos)
     seed = _next_seed(state.plan.seed)
     config = replace(state.config, semente=seed)
-    plan = compose(items, config.modo, seed, config.cover_ids)
+    motor_config = config.to_motor_config()
+    plan = compose(items, motor_config.modo, seed, motor_config.cover_ids)
     return ProjectState(config, plan, state.photo_paths, state.cache_keys, state.plan)
 
 

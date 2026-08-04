@@ -57,6 +57,19 @@ def test_save_and_load_round_trip_unicode_windows_metadata_without_image_bytes(t
     assert load_project(destination) == state
 
 
+def test_project_state_snapshots_config_so_external_or_direct_mutation_cannot_diverge_seed(tmp_path: Path):
+    from provas.projeto import ProjectState
+
+    photos = _photos(tmp_path)
+    mutable = Config(str(tmp_path), modo="fotolivro", semente=41, cover_ids=(photos[0].id,))
+    state = ProjectState(mutable, compose(photos, "fotolivro", 41, mutable.cover_ids))
+    mutable.semente = 999
+
+    assert state.config.semente == state.plan.seed == 41
+    with pytest.raises((AttributeError, TypeError)):
+        state.config.semente = 999
+
+
 def test_load_reports_missing_source_paths_exactly_without_failing(tmp_path: Path):
     from provas.projeto import load_project, save_project
 
