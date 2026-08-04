@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import io
+from pathlib import Path
+
+import pymupdf
+import pytest
+from PIL import Image
+
+from provas.modelos import BookPlan, PagePlan, PhotoInfo, Rect
+from provas.templates import catalog, fit_contain
+
+
+def _photo(path: Path, index: int) -> PhotoInfo:
+    with Image.open(path) as image:
+        width, height = image.size
+    return PhotoInfo(str(path), str(path), path.name, width, height, index)
+
+
+def _point_rect(rect, page_width: float, page_height: float) -> pymupdf.Rect:
+    return pymupdf.Rect(
+        rect.x * page_width,
+        rect.y * page_height,
+        rect.right * page_width,
+        rect.bottom * page_height,
+    )
+
+
+@pytest.mark.parametrize(
+    ("template_id", "sizes"),
+    [
+        ("single-portrait", ((200, 300),)),
+        ("single-landscape", ((300, 200),)),
+        ("pair-asymmetric-left", ((200, 300), (300, 200))),
+        ("quad-grid", ((200, 300), (300, 200), (200, 300), (300, 200))),
+    ],
+)
+@pytest.mark.parametrize("mode", ["prova", "fotolivro"])
+def test_render_page_uses_a4_landscape_slots_without_cropping(
+    tmp_path: Path, image_factory, template_id: str, sizes: tuple[tuple[int, int], ...], mode: str
+):
+    from provas.documento import Documento, Tipografia
+
+    paths = [
+        image_factory(f"arquivo_extremamente_longo_{index:02d}.jpg", size=size, color=(40 + index * 30, 80, 160))
+        for index, size in enumerate(sizes)
+    ]
+    infos = tuple(_photo(path, index) for index, path in enumerate(paths))
+    page_plan = PagePlan(1, template_id, tuple(info.id for info in infos), "opening")
+    template = next(item for item in catalog() if item.id == template_id).resolve(mode)
+    doc = Documento("Ensaio", "03.08.2026", True, Tipografia(), None, modo=mode)
+
+    doc.render_page(page_plan, template, {info.id: info for info in infos})
+    output = tmp_path / f"{mode}-{template_id}.pdf"
+    doc.salvar(str(output))
+
+    with pymupdf.open(output) as pdf:
+        assert pdf.page_count == 1
+        expected_title = "Ensaio — provas" if mode == "prova" else "Ensaio — fotolivro"
+        assert pdf.metadata["title"] == expected_title
+        page = pdf[0]
+        assert page.rect.width == pytest.approx(841.89, abs=0.1)
+        assert page.rect.height == pytest.approx(595.28, abs=0.1)
+        assert len(page.get_images(full=True)) == len(infos)
+
+        text = page.get_text()
+        for info in infos:
+            assert (info.label in text) is (mode == "prova")
+
+        actual_rects = [page.get_image_rects(image)[0] for image in page.get_images(full=True)]
+        for actual, info, slot in zip(actual_rects, infos, template.slots):
+            slot_rect = _point_rect(slot.rect, page.rect.width, page.rect.height)
+            assert actual.x0 >= slot_rect.x0 - 0.05
+            assert actual.y0 >= slot_rect.y0 - 0.05
+            assert actual.x1 <= slot_rect.x1 + 0.05
+            assert actual.y1 <= slot_rect.y1 + 0.05
+            physical = Rect(slot_rect.x0, slot_rect.y0, slot_rect.width, slot_rect.height)
+            expected = fit_contain(physical, info.width / info.height)
+            expected_rect = pymupdf.Rect(expected.x, expected.y, expected.right, expected.bottom)
+            assert tuple(actual) == pytest.approx(tuple(expected_rect), abs=0.05)
+            assert actual.width / actual.height == pytest.approx(info.width / info.height, rel=1e-4)
+
+
+def test_proof_caption_is_ellipsized_inside_its_own_rectangle(tmp_path: Path, image_factory):
+    from provas.documento import Documento, Tipografia
+
+    path = image_factory(("nome_muito_longo_" * 8) + ".jpg", size=(200, 300))
+    info = _photo(path, 0)
+    page_plan = PagePlan(1, "single-portrait", (info.id,), "opening")
+    template = next(item for item in catalog() if item.id == "single-portrait").resolve("prova")
+    doc = Documento("Ensaio", "", True, Tipografia(), None, modo="prova")
+    doc.render_page(page_plan, template, {info.id: info})
+    output = tmp_path / "caption.pdf"
+    doc.salvar(str(output))
+
+    with pymupdf.open(output) as pdf:
+        words = pdf[0].get_text("words")
+        caption = _point_rect(template.slots[0].caption, pdf[0].rect.width, pdf[0].rect.height)
+        caption_words = [word for word in words if pymupdf.Rect(word[:4]).intersects(caption)]
+        assert caption_words
+        assert all(caption.contains(pymupdf.Rect(word[:4])) for word in caption_words)
+        assert info.label not in pdf[0].get_text()
+
+
+def test_thumbnail_reuses_pdf_rendering_rules_and_cache(image_factory):
+    from provas import preview
+
+    path = image_factory("vertical.jpg", size=(200, 300), color=(220, 40, 40))
+    info = _photo(path, 0)
+    plan = BookPlan(91, "prova", (), (PagePlan(1, "single-portrait", (info.id,), "opening"),))
+    assets = {info.id: info}
+
+    first = preview.render_page_thumbnail(plan, 1, assets, 420)
+    second = preview.render_page_thumbnail(plan, 1, assets, 420)
+
+    assert first is second
+    assert first.size == (420, pytest.approx(420 / (297 / 210), abs=1))
+
+
+def test_render_asset_keeps_jpeg_stream_for_pdf_embedding(image_factory):
+    from provas.documento import RenderAsset
+
+    path = image_factory("stream.jpg", size=(200, 300))
+    data = path.read_bytes()
+    asset = RenderAsset("photo", "stream.jpg", data, 200, 300)
+
+    with Image.open(io.BytesIO(asset.jpeg)) as image:
+        assert image.format == "JPEG"
+        assert asset.ratio == pytest.approx(2 / 3)

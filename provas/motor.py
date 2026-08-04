@@ -9,9 +9,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
 
+import pymupdf
 from PIL import Image
 
-from . import capas, documento, imagens, tema
+from . import capas, documento, imagens, preview, tema
+from .analise import AnalysisResult, analisar_fotos
+from .compositor import compose, validate_plan
+from .modelos import BookPlan, PhotoInfo
+from .templates import catalog
 
 QUALIDADES = {
     "leve":   (150, 78),
@@ -46,6 +51,12 @@ class Config:
     estilo_capa: str = "mosaico"
     chamada: str = "Escolha suas favoritas"
     limite: int = 0            # 0 = todas; útil para gerar uma amostra rápida
+    modo: str = "prova"
+    semente: int = 0
+    cover_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        self.cover_ids = tuple(self.cover_ids)
 
     def com_padroes(self) -> "Config":
         """Preenche título, subtítulo e caminho de saída a partir da pasta."""
@@ -85,6 +96,58 @@ def _codificar(imagem: Image.Image, qualidade: int) -> bytes:
     return buffer.getvalue()
 
 
+def _cancelled(cancelar: object | None) -> bool:
+    if cancelar is None:
+        return False
+    if callable(cancelar):
+        return bool(cancelar())
+    is_set = getattr(cancelar, "is_set", None)
+    return bool(is_set()) if callable(is_set) else bool(cancelar)
+
+
+def _avisar(progresso, feito: int, total: int, mensagem: str, cancelar: object | None) -> None:
+    if _cancelled(cancelar):
+        raise Cancelado()
+    if progresso:
+        progresso(feito, total, mensagem)
+
+
+def _analisar_config(
+    config: Config,
+    progresso=None,
+    cancelar: object | None = None,
+    *,
+    require_photos: bool = True,
+) -> AnalysisResult:
+    fotos = imagens.listar_fotos(config.pasta, config.recursivo)
+    if config.limite:
+        fotos = fotos[:config.limite]
+    if not fotos:
+        raise ValueError("Nenhuma foto encontrada nessa pasta.")
+
+    def progress(value: tuple[int, str]) -> None:
+        percent, label = value
+        _avisar(progresso, percent, 100, f"Analisando {label}", cancelar)
+
+    result = analisar_fotos(fotos, cancelar=cancelar, progresso=progress)
+    if _cancelled(cancelar):
+        raise Cancelado()
+    if require_photos and not result.photos:
+        raise ValueError("Nenhuma foto pôde ser lida. Veja a lista de erros.")
+    return result
+
+
+def gerar_plano(config: Config, progresso=None, cancelar: object | None = None) -> BookPlan:
+    """Analyze the source folder and compose the only plan used downstream."""
+    config = config.com_padroes()
+    if config.modo not in {"prova", "fotolivro"}:
+        raise ValueError(f"Unsupported mode: {config.modo}")
+    _avisar(progresso, 0, 100, "Procurando fotos…", cancelar)
+    result = _analisar_config(config, progresso, cancelar)
+    _avisar(progresso, 100, 100, "Compondo o fotolivro…", cancelar)
+    return compose(result.photos, config.modo, config.semente, config.cover_ids)
+
+
 def _proporcao_tipica(fotos, girar: bool, amostra: int = 8) -> float:
     """Razão largura/altura típica da sessão, para escolher a grade."""
     razoes = []
@@ -100,6 +163,219 @@ def _proporcao_tipica(fotos, girar: bool, amostra: int = 8) -> float:
         else:
             razoes.append(largura / altura)
     return statistics.median(razoes) if razoes else 2 / 3
+
+
+def _prepare_render_assets(
+    config: Config,
+    plan: BookPlan,
+    progresso=None,
+    cancelar: object | None = None,
+) -> tuple[dict[str, documento.RenderAsset], AnalysisResult]:
+    """Load only plan-backed assets; never repair or recompose the supplied plan."""
+    analysis = _analisar_config(config, progresso, cancelar, require_photos=False)
+    by_id = {photo.id: photo for photo in analysis.photos}
+    planned_ids = tuple(photo_id for page in plan.pages for photo_id in page.photo_ids)
+    required_ids = tuple(dict.fromkeys((*planned_ids, *plan.cover_photo_ids)))
+    missing = [photo_id for photo_id in required_ids if photo_id not in by_id]
+    if missing:
+        names = ", ".join(os.path.basename(photo_id) for photo_id in missing)
+        raise ValueError(f"Fotos do plano não puderam ser lidas: {names}")
+
+    planned_photos = [by_id[photo_id] for photo_id in planned_ids]
+    errors = validate_plan(plan, planned_photos)
+    if errors:
+        raise ValueError("; ".join(errors))
+
+    dpi, quality = QUALIDADES.get(config.qualidade, QUALIDADES["normal"])
+    max_side = max(640, round(max(tema.A4_PAISAGEM) / 72 * dpi))
+    watermark = None
+    logo_path = config.logo.strip()
+    if (
+        plan.mode == "prova" and config.marca_dagua and config.marca_opacidade > 0
+        and logo_path and os.path.exists(logo_path)
+    ):
+        logo = imagens.carregar_logo(logo_path)
+        try:
+            watermark = imagens.logo_branco(logo)
+        finally:
+            logo.close()
+
+    assets: dict[str, documento.RenderAsset] = {}
+    total = len(required_ids)
+    try:
+        for index, photo_id in enumerate(required_ids, start=1):
+            _avisar(progresso, index - 1, max(1, total), "Preparando fotos…", cancelar)
+            info = by_id[photo_id]
+            source = imagens.abrir(imagens.Foto(info.path, info.label))
+            page_image = source
+            resized = source
+            try:
+                resized = imagens.redimensionar(source, max_side)
+                page_image = resized
+                if watermark is not None:
+                    page_image = imagens.aplicar_marca_dagua(
+                        resized, watermark, config.marca_largura, config.marca_opacidade,
+                    )
+                assets[photo_id] = documento.RenderAsset(
+                    photo_id, info.label, _codificar(page_image, quality),
+                    page_image.width, page_image.height,
+                )
+            finally:
+                seen: set[int] = set()
+                for image in (page_image, resized, source):
+                    if id(image) not in seen:
+                        image.close()
+                        seen.add(id(image))
+            _avisar(progresso, index, max(1, total), f"Preparando fotos… {index}/{total}", cancelar)
+    finally:
+        if watermark is not None:
+            watermark.close()
+    return assets, analysis
+
+
+def _logo_document(config: Config) -> tuple[bytes | None, float, tema.Paleta]:
+    palette = tema.paleta(config.cor_fundo)
+    logo_path = config.logo.strip()
+    if not logo_path or not os.path.exists(logo_path):
+        return None, 1200 / 630, palette
+    logo = imagens.carregar_logo(logo_path)
+    version = logo if palette.claro else imagens.logo_bicolor(logo)
+    try:
+        buffer = io.BytesIO()
+        version.save(buffer, format="PNG")
+        return buffer.getvalue(), version.width / version.height, palette
+    finally:
+        if version is not logo:
+            version.close()
+        logo.close()
+
+
+def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
+    logo, logo_ratio, palette = _logo_document(config)
+    return documento.Documento(
+        config.titulo,
+        config.subtitulo,
+        True,
+        documento.Tipografia(),
+        logo,
+        logo_ratio,
+        nota_capa="CADA FOTO TRAZ SEU CÓDIGO LOGO ABAIXO" if mode == "prova" else "",
+        estudio=config.estudio,
+        site=config.site,
+        paleta=palette,
+        modo=mode,
+    )
+
+
+def gerar_preview(
+    config: Config,
+    plan: BookPlan,
+    width: int = 420,
+    progresso=None,
+    cancelar: object | None = None,
+) -> tuple[Image.Image, ...]:
+    """Render thumbnails for the supplied plan without composing a replacement."""
+    config = config.com_padroes()
+    assets, _ = _prepare_render_assets(config, plan, progresso, cancelar)
+    thumbnails = []
+    total = len(plan.pages)
+    for index, page_plan in enumerate(plan.pages, start=1):
+        _avisar(progresso, index - 1, max(1, total), "Renderizando prévia…", cancelar)
+        thumbnails.append(preview.render_page_thumbnail(plan, page_plan.number, assets, width))
+        _avisar(progresso, index, max(1, total), f"Prévia… página {index}/{total}", cancelar)
+    return tuple(thumbnails)
+
+
+def _render_cover(
+    doc: documento.Documento,
+    config: Config,
+    plan: BookPlan,
+    photos: dict[str, PhotoInfo],
+) -> bool:
+    selected = [photos[photo_id] for photo_id in plan.cover_photo_ids if photo_id in photos]
+    if not config.capa_mosaico or not selected:
+        return False
+    thumbnails: list[Image.Image] = []
+    try:
+        for info in selected:
+            source = imagens.abrir(imagens.Foto(info.path, info.label))
+            try:
+                resized = imagens.redimensionar(source, LADO_MINIATURA)
+                thumbnails.append(resized.copy() if resized is source else resized)
+            finally:
+                source.close()
+        width = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
+        height = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
+        cover = capas.gerar_mosaico_editorial(thumbnails, width, height, doc.p)
+        photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
+        doc.capa(_codificar(cover.imagem, 88), photo_count, config.chamada, cover.ancora)
+    finally:
+        for thumbnail in thumbnails:
+            thumbnail.close()
+    return True
+
+
+def _validate_export(path: str, expected_pages: int) -> None:
+    """Reopen a finished sibling file before it is allowed to replace the destination."""
+    with pymupdf.open(path) as pdf:
+        if pdf.page_count != expected_pages:
+            raise ValueError(f"PDF inválido: esperado {expected_pages} páginas, obtido {pdf.page_count}")
+        for page in pdf:
+            if page.rect.width <= page.rect.height:
+                raise ValueError("PDF inválido: página editorial não está em A4 horizontal")
+            if (
+                abs(page.rect.width - tema.A4_PAISAGEM[0]) > 0.2
+                or abs(page.rect.height - tema.A4_PAISAGEM[1]) > 0.2
+            ):
+                raise ValueError("PDF inválido: página fora do tamanho A4")
+
+
+def exportar(
+    config: Config,
+    plan: BookPlan,
+    progresso=None,
+    cancelar: object | None = None,
+) -> Resultado:
+    """Atomically export the exact supplied plan after save and reopen validation."""
+    if _cancelled(cancelar):
+        raise Cancelado()
+    config = config.com_padroes()
+    assets, analysis = _prepare_render_assets(config, plan, progresso, cancelar)
+    destination = config.saida
+    temporary = f"{destination}.tmp"
+    os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
+    doc = _new_editorial_document(config, plan.mode)
+    cover_rendered = False
+    try:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        cover_rendered = _render_cover(
+            doc, config, plan, {photo.id: photo for photo in analysis.photos},
+        )
+        templates = {template.id: template for template in catalog()}
+        total = len(plan.pages)
+        for index, page_plan in enumerate(plan.pages, start=1):
+            _avisar(progresso, index - 1, max(1, total), "Diagramando o PDF…", cancelar)
+            try:
+                template = templates[page_plan.template_id].resolve(plan.mode)
+            except KeyError as exc:
+                raise ValueError(f"Unknown template: {page_plan.template_id}") from exc
+            doc.render_page(page_plan, template, assets)
+            _avisar(progresso, index, max(1, total), f"Diagramando… página {index}/{total}", cancelar)
+        doc.salvar(temporary)
+        _validate_export(temporary, len(plan.pages) + int(cover_rendered))
+        if _cancelled(cancelar):
+            raise Cancelado()
+        os.replace(temporary, destination)
+    finally:
+        doc.fechar()
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    _avisar(progresso, len(plan.pages), max(1, len(plan.pages)), "Pronto.", cancelar)
+    photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
+    return Resultado(
+        destination, photo_count, len(plan.pages), list(analysis.failures),
+    )
 
 
 def gerar(config: Config, progresso=None, cancelar: threading.Event | None = None) -> Resultado:

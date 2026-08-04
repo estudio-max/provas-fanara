@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import io
+from collections.abc import Mapping
 
 import pymupdf
+from PIL import Image
 
-from . import tema
+from . import imagens, tema
+from .modelos import PagePlan, PhotoInfo, Rect, Template
+from .templates import fit_contain
 
 NOME_SERIF = "fanSerif"
 NOME_SERIF_ITALICO = "fanSerifIt"
@@ -18,6 +23,61 @@ _PAPEIS = {
     NOME_SANS: tema.SANS,
     NOME_SANS_MEDIO: tema.SANS_MEDIO,
 }
+
+
+@dataclass(frozen=True)
+class RenderAsset:
+    """A decoded photograph ready to be embedded without further geometry changes."""
+
+    id: str
+    label: str
+    jpeg: bytes
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("Render asset dimensions must be positive")
+
+    @property
+    def ratio(self) -> float:
+        return self.width / self.height
+
+
+def _jpeg(image: Image.Image, quality: int = 90) -> bytes:
+    buffer = io.BytesIO()
+    image.convert("RGB").save(
+        buffer, format="JPEG", quality=quality, optimize=True,
+        progressive=False, subsampling=1,
+    )
+    return buffer.getvalue()
+
+
+def _render_asset(photo_id: str, source: object) -> RenderAsset:
+    """Accept pipeline assets and useful public input forms for direct rendering."""
+    if isinstance(source, RenderAsset):
+        return source
+    if isinstance(source, PhotoInfo):
+        foto = imagens.Foto(source.path, source.label)
+        image = imagens.abrir(foto)
+        try:
+            return RenderAsset(source.id, source.label, _jpeg(image), image.width, image.height)
+        finally:
+            image.close()
+    if isinstance(source, Image.Image):
+        return RenderAsset(photo_id, photo_id, _jpeg(source), source.width, source.height)
+    if isinstance(source, (bytes, bytearray)):
+        data = bytes(source)
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            label = photo_id
+        return RenderAsset(photo_id, label, data, width, height)
+    raise TypeError(f"Unsupported render asset for {photo_id!r}: {type(source).__name__}")
+
+
+def _points(rect: Rect, page_size: tuple[float, float]) -> pymupdf.Rect:
+    width, height = page_size
+    return pymupdf.Rect(rect.x * width, rect.y * height, rect.right * width, rect.bottom * height)
 
 
 class Tipografia:
@@ -177,7 +237,10 @@ class Documento:
     def __init__(self, titulo: str, subtitulo: str, paisagem: bool, tipografia: Tipografia,
                  logo: bytes | None, logo_proporcao: float = 1200 / 630,
                  rodape: str = "", nota_capa: str = "", estudio: str = "",
-                 site: str = "", paleta: tema.Paleta | None = None) -> None:
+                 site: str = "", paleta: tema.Paleta | None = None,
+                 modo: str = "prova") -> None:
+        if modo not in {"prova", "fotolivro"}:
+            raise ValueError(f"Unsupported mode: {modo}")
         self.pdf = pymupdf.open()
         self.rodape = rodape
         self.nota_capa = nota_capa
@@ -190,6 +253,7 @@ class Documento:
         self.tipo = tipografia
         self.logo = logo
         self.logo_proporcao = logo_proporcao
+        self.modo = modo
         self.tamanho = tema.A4_PAISAGEM if paisagem else tema.A4
 
     def nova_pagina(self) -> pymupdf.Page:
@@ -197,6 +261,55 @@ class Documento:
         pagina.draw_rect(pymupdf.Rect(0, 0, *self.tamanho), color=None, fill=self.p.fundo)
         self.tipo.registrar(pagina)
         return pagina
+
+    def render_page(
+        self,
+        page_plan: PagePlan,
+        template: Template,
+        assets: Mapping[str, object],
+    ) -> pymupdf.Page:
+        """Render one editorial page from normalized slots, always containing photos."""
+        if not self.paisagem:
+            raise ValueError("Editorial pages require A4 landscape orientation")
+        if len(template.slots) != len(page_plan.photo_ids):
+            raise ValueError(
+                f"Template {template.id} expects {len(template.slots)} photos, "
+                f"got {len(page_plan.photo_ids)}"
+            )
+        missing = [photo_id for photo_id in page_plan.photo_ids if photo_id not in assets]
+        if missing:
+            raise ValueError(f"Missing render assets: {', '.join(missing)}")
+
+        # Callers normally pass a resolved template. Accepting catalog templates
+        # here keeps the public method safe without shrinking an already-resolved
+        # proof slot a second time.
+        has_captions = any(slot.caption.width and slot.caption.height for slot in template.slots)
+        resolved = template.resolve(self.modo) if self.modo == "fotolivro" or not has_captions else template
+        page = self.nova_pagina()
+        for photo_id, slot in zip(page_plan.photo_ids, resolved.slots):
+            asset = _render_asset(photo_id, assets[photo_id])
+            slot_points = _points(slot.rect, self.tamanho)
+            physical_bounds = Rect(slot_points.x0, slot_points.y0, slot_points.width, slot_points.height)
+            contained = fit_contain(physical_bounds, asset.ratio)
+            image_rect = pymupdf.Rect(contained.x, contained.y, contained.right, contained.bottom)
+            page.insert_image(image_rect, stream=asset.jpeg, keep_proportion=True)
+            page.draw_rect(image_rect, color=self.p.moldura, width=0.45)
+
+            if self.modo != "prova" or not slot.caption.width or not slot.caption.height:
+                continue
+            caption_rect = _points(slot.caption, self.tamanho)
+            page.draw_rect(caption_rect, color=None, fill=self.p.painel)
+            font_size = 7.2 if caption_rect.width >= 150 else 6.2
+            label = self.tipo.encaixar(
+                asset.label, NOME_SANS_MEDIO, font_size,
+                max(1.0, caption_rect.width - 8), 0.25,
+            )
+            baseline = min(caption_rect.y1 - 2.0, caption_rect.y0 + font_size + 2.0)
+            self.tipo.escrever(
+                page, caption_rect.x0 + 4.0, baseline, label,
+                NOME_SANS_MEDIO, font_size, self.p.apagado, 0.25,
+            )
+        return page
 
     # cabeçalho e rodapé -------------------------------------------------
     def moldura(self, pagina: pymupdf.Page, numero: int, total: int) -> None:
@@ -283,7 +396,8 @@ class Documento:
         # âncora baixa: a chamada acompanha o bloco em vez de ir para o pé da página
         compacto = ancora > 0.5
 
-        self.tipo.escrever(pagina, centro, base, "PROVAS DO ENSAIO", NOME_SANS_MEDIO, 8,
+        cover_label = "PROVAS DO ENSAIO" if self.modo == "prova" else "FOTOLIVRO"
+        self.tipo.escrever(pagina, centro, base, cover_label, NOME_SANS_MEDIO, 8,
                            self.p.acento, 3.4, "centro")
 
         if self.logo:
@@ -318,11 +432,19 @@ class Documento:
                            self.p.acento, 1.6, "centro")
 
     def salvar(self, caminho: str) -> None:
+        suffix = "provas" if self.modo == "prova" else "fotolivro"
         self.pdf.set_metadata({
-            "title": f"{self.titulo} — provas",
+            "title": f"{self.titulo} — {suffix}",
             "author": self.estudio or "",
-            "subject": "Seleção de fotos do ensaio",
+            "subject": "Seleção de fotos do ensaio" if self.modo == "prova" else "Fotolivro editorial",
             "creator": "Provas",
         })
-        self.pdf.save(caminho, deflate=True, garbage=3)
-        self.pdf.close()
+        try:
+            self.pdf.save(caminho, deflate=True, garbage=3)
+        finally:
+            self.pdf.close()
+
+    def fechar(self) -> None:
+        """Close an unsaved document after cancellation or a failed export."""
+        if not self.pdf.is_closed:
+            self.pdf.close()
