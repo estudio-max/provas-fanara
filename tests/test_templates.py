@@ -83,6 +83,22 @@ def test_template_copies_mutable_constructor_collections():
     assert template.orientations == frozenset({"portrait"})
 
 
+def test_template_rejects_degenerate_image_slots():
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        Template("degenerate", (Slot(Rect(0, 0, 0, 0.5)),), {"portrait"}, 1.0, "airy")
+
+
+def test_template_rejects_caption_outside_normalized_page():
+    with pytest.raises(ValueError, match="Captions must stay within the normalized page"):
+        Template(
+            "caption-outside",
+            (Slot(Rect(0, 0, 0.5, 0.5), Rect(0.9, 0.1, 0.2, 0.1)),),
+            {"portrait"},
+            1.0,
+            "airy",
+        )
+
+
 def test_page_and_book_plans_copy_mutable_constructor_collections():
     photo_ids = ["1"]
     pages = [PagePlan(1, "single-portrait", photo_ids, "opening")]

@@ -72,8 +72,18 @@ class Template:
         for slot in self.slots:
             if not (0 <= slot.rect.x <= 1 and 0 <= slot.rect.y <= 1):
                 raise ValueError("Slot positions must be normalized")
+            if slot.rect.width <= 0 or slot.rect.height <= 0:
+                raise ValueError("Slot dimensions must be positive")
             if slot.rect.right > 1 or slot.rect.bottom > 1:
                 raise ValueError("Slots must stay within the normalized page")
+            if not (0 <= slot.caption.x <= 1 and 0 <= slot.caption.y <= 1):
+                raise ValueError("Caption positions must be normalized")
+            if slot.caption.width == 0 and slot.caption.height != 0:
+                raise ValueError("Caption dimensions must both be positive or empty")
+            if slot.caption.height == 0 and slot.caption.width != 0:
+                raise ValueError("Caption dimensions must both be positive or empty")
+            if slot.caption.right > 1 or slot.caption.bottom > 1:
+                raise ValueError("Captions must stay within the normalized page")
 
     def resolve(self, mode: str) -> Template:
         """Return the mode-specific layout without mutating the catalog template."""
