@@ -9,12 +9,19 @@ import platform
 import sys
 import tempfile
 
-from packaging.version import InvalidVersion, Version
+try:
+    from packaging.version import InvalidVersion, Version
+except ImportError:
+    InvalidVersion = ValueError
+    Version = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 OK, FALHA, AVISO = "  ok ", "FALHA", "aviso"
-DEPENDENCIAS = (("PIL", "Pillow", "10.0"), ("pymupdf", "PyMuPDF", "1.24"), ("PySide6", "PySide6", "6.7"))
+DEPENDENCIAS = (
+    ("PIL", "Pillow", "10.0"), ("pymupdf", "PyMuPDF", "1.24"),
+    ("PySide6", "PySide6", "6.7"), ("packaging", "packaging", "23.0"),
+)
 
 
 def linha(estado: str, texto: str) -> None:
@@ -23,6 +30,8 @@ def linha(estado: str, texto: str) -> None:
 
 def versao_compativel(instalada: str, minima: str) -> bool:
     """Compare package versions according to PEP 440, including prereleases."""
+    if Version is None:
+        return False
     try:
         return Version(instalada) >= Version(minima)
     except InvalidVersion:
@@ -44,7 +53,7 @@ def diagnosticar_dependencias() -> int:
             versao = str(getattr(importado, "__version__", "0"))
         except ImportError:
             problemas += 1
-            linha(FALHA, f"{apelido} ausente; mínimo {minima}. Rode: python -m pip install Pillow PyMuPDF PySide6")
+            linha(FALHA, f"{apelido} ausente; mínimo {minima}. Rode: python -m pip install .")
             continue
         if versao_compativel(versao, minima):
             linha(OK, f"{apelido} {versao} (mínimo {minima})")

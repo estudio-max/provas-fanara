@@ -122,8 +122,10 @@ def test_cli_rejeita_flags_que_quebrariam_os_modos_e_mantem_help_em_portugues(tm
     [
         ((), "informe a pasta"),
         (("--modo",), "exige um valor"),
+        (("--modo", "-n"), "exige um valor"),
         (("--por-pagina", "quatro"), "número inteiro inválido"),
         (("--qualidade", "ultra"), "qualidade inválida"),
+        (("--capa", "desconhecida"), "capa inválida"),
         (("--desconhecida",), "argumentos não reconhecidos"),
     ],
 )
@@ -184,3 +186,18 @@ def test_verificador_rejeita_versoes_abaixo_do_minimo():
     assert verificar.versao_compativel("1.23.9", "1.24") is False
     assert verificar.versao_compativel("10.0rc1", "10.0") is False
     assert verificar.versao_compativel("6.7.0", "6.7") is True
+
+
+def test_verificador_sem_packaging_nao_falha_no_import_e_readme_instala_o_projeto():
+    result = subprocess.run(
+        [sys.executable, "-S", str(ROOT / "verificar.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "packaging" in result.stdout.lower()
+    assert "traceback" not in result.stderr.lower()
+    assert "pip install ." in (ROOT / "README.md").read_text(encoding="utf-8")

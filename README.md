@@ -10,7 +10,7 @@ Para executar o código-fonte, instale Python 3.10 ou mais recente e as
 dependências:
 
 ```powershell
-python -m pip install Pillow PyMuPDF PySide6
+python -m pip install .
 python verificar.py
 python Provas.pyw
 ```

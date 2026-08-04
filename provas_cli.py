@@ -41,7 +41,8 @@ class ParserEmPortugues(argparse.ArgumentParser):
             acao = self._option_string_actions.get(opcao)
             if acao is None or "=" in valor or acao.nargs == 0:
                 continue
-            if indice == len(valores) - 1 or valores[indice + 1].startswith("--"):
+            proximo = valores[indice + 1] if indice + 1 < len(valores) else ""
+            if indice == len(valores) - 1 or proximo in self._option_string_actions:
                 self.error(f"a opção {opcao} exige um valor")
 
     def _get_value(self, action, arg_string):
@@ -96,6 +97,13 @@ def qualidade_editorial(value: str) -> str:
     return value
 
 
+def estilo_capa(value: str) -> str:
+    if value not in capas.ESTILOS:
+        opcoes = ", ".join(capas.ESTILOS)
+        raise argparse.ArgumentTypeError(f"capa inválida: {value!r}. Use {opcoes}.")
+    return value
+
+
 def criar_parser() -> argparse.ArgumentParser:
     parser = ParserEmPortugues(
         description="Gera um PDF editorial de uma sessão fotográfica.", add_help=False,
@@ -112,7 +120,7 @@ def criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--site", default="", help="endereço mostrado no rodapé")
     parser.add_argument("--fundo", default=tema.FUNDO_PADRAO, help="cor de fundo, ex.: #16161A")
     parser.add_argument("--opacidade", type=float, default=0.20, help="força da marca d'água")
-    parser.add_argument("--capa", choices=list(capas.ESTILOS), default="mosaico")
+    parser.add_argument("--capa", type=estilo_capa, metavar="{mosaico,losango,destaque}", default="mosaico")
     parser.add_argument("--sem-capa", action="store_true")
     parser.add_argument("--modo", type=modo_editorial, metavar="{prova,fotolivro}", default="prova",
                         help="prova com marca e códigos, ou fotolivro limpo")
