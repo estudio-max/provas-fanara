@@ -63,9 +63,14 @@ def _middle_sizes(count: int, rng: random.Random) -> list[int]:
     return sizes
 
 
-def _best_in_window(items: list[PhotoInfo], window: range, exclude: set[str]) -> PhotoInfo:
+def _best_in_window(
+    items: list[PhotoInfo], window: range, exclude: set[str], ranks: dict[str, int]
+) -> PhotoInfo:
     candidates = [items[index] for index in window if items[index].id not in exclude]
-    return max(candidates, key=lambda photo: (photo.quality, photo.sharpness, photo.density, -photo.index, photo.id))
+    return max(
+        candidates,
+        key=lambda photo: (photo.quality, photo.sharpness, photo.density, -ranks[photo.id], photo.id),
+    )
 
 
 def _different_group(candidate: PhotoInfo, selected: list[PhotoInfo]) -> float:
@@ -75,27 +80,27 @@ def _different_group(candidate: PhotoInfo, selected: list[PhotoInfo]) -> float:
 
 
 def _take_adjacent_complements(
-    remaining: list[PhotoInfo], size: int, output_start: int
+    remaining: list[PhotoInfo], size: int, output_start: int, ranks: dict[str, int]
 ) -> list[PhotoInfo]:
-    """Diversify a local group without ever moving a source item more than eight slots."""
+    """Diversify a local group without moving a valid-photo rank more than eight slots."""
     selected: list[PhotoInfo] = []
     while len(selected) < size:
         output_position = output_start + len(selected)
         candidates = [
             photo for photo in remaining
-            if abs(photo.index - output_position) <= 8
+            if abs(ranks[photo.id] - output_position) <= 8
         ]
         if not candidates:
             raise ValueError("Cannot satisfy the eight-position narrative movement limit")
 
-        due = [photo for photo in candidates if photo.index <= output_position - 8]
+        due = [photo for photo in candidates if ranks[photo.id] <= output_position - 8]
         if due:
             candidates = due
         elif not selected and remaining[0] in candidates:
             candidates = [remaining[0]]
 
         def value(candidate: PhotoInfo) -> tuple[float, float, int, str]:
-            distance = abs(candidate.index - output_position)
+            distance = abs(ranks[candidate.id] - output_position)
             contrast = max(
                 abs(candidate.density - photo.density) + abs(candidate.exposure - photo.exposure)
                 for photo in selected
@@ -117,14 +122,17 @@ def agrupar_fotos(items: Iterable[PhotoInfo], seed: int) -> tuple[PhotoGroup, ..
         return (PhotoGroup((ordered[0].id,), "opening", "airy"),)
 
     rng = random.Random(seed)
-    opening = _best_in_window(ordered, range(min(9, len(ordered))), set())
-    ending = _best_in_window(ordered, range(max(0, len(ordered) - 9), len(ordered)), {opening.id})
+    ranks = {photo.id: rank for rank, photo in enumerate(ordered)}
+    opening = _best_in_window(ordered, range(min(9, len(ordered))), set(), ranks)
+    ending = _best_in_window(
+        ordered, range(max(0, len(ordered) - 9), len(ordered)), {opening.id}, ranks
+    )
     remaining = [photo for photo in ordered if photo.id not in {opening.id, ending.id}]
 
     groups = [PhotoGroup((opening.id,), "opening", "airy")]
     output_position = 1
     for size in _middle_sizes(len(remaining), rng):
-        selection = _take_adjacent_complements(remaining, size, output_position)
+        selection = _take_adjacent_complements(remaining, size, output_position, ranks)
         output_position += size
         density = "dense" if size == 4 else "balanced" if size == 2 else "airy"
         role = "sequence" if size > 1 else "pause"

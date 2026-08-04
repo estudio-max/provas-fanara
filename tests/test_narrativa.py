@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError
 import random
 
 import pytest
+from PIL import Image
 
 from provas.modelos import PhotoInfo
 
@@ -148,3 +149,35 @@ def test_score_cover_rewards_higher_exposure_quality_not_midpoint_brightness():
     well_exposed = PhotoInfo("high", "high.jpg", "High", 120, 180, 1, quality=0.70, exposure=0.9, similarity_group=2)
 
     assert score_cover([midpoint, well_exposed])[0].id == "high"
+
+
+def test_agrupar_fotos_uses_valid_photo_rank_when_source_indices_have_a_gap():
+    from provas.narrativa import agrupar_fotos
+
+    first = PhotoInfo("p0", "p0.jpg", "P 0", 120, 180, 0, quality=1.0)
+    later = PhotoInfo("p10", "p10.jpg", "P 10", 120, 180, 10, quality=0.9)
+
+    groups = agrupar_fotos([first, later], seed=3)
+
+    assert [photo_id for group in groups for photo_id in group.photo_ids] == ["p0", "p10"]
+    assert [first.index, later.index] == [0, 10]
+
+
+def test_analysis_to_narrative_uses_valid_ranks_after_intermediate_corrupt_files(tmp_path):
+    from provas.analise import analisar_fotos
+    from provas.imagens import listar_fotos
+    from provas.narrativa import agrupar_fotos
+
+    for index in (0, 10, 11):
+        Image.new("RGB", (120, 180), (100, 100, 100)).save(tmp_path / f"D61_{index:04d}.jpg")
+    for index in range(1, 10):
+        (tmp_path / f"D61_{index:04d}.jpg").write_bytes(b"corrupt image")
+
+    result = analisar_fotos(listar_fotos(str(tmp_path)))
+    groups = agrupar_fotos(result.photos, seed=3)
+    output_ids = [photo_id for group in groups for photo_id in group.photo_ids]
+    output_positions = {photo_id: position for position, photo_id in enumerate(output_ids)}
+    valid_ranks = {photo.id: rank for rank, photo in enumerate(result.photos)}
+
+    assert [photo.index for photo in result.photos] == [0, 10, 11]
+    assert all(abs(valid_ranks[photo.id] - output_positions[photo.id]) <= 8 for photo in result.photos)
