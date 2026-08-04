@@ -6,6 +6,7 @@ import os
 import statistics
 import tempfile
 import threading
+from weakref import WeakValueDictionary
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
@@ -27,6 +28,19 @@ QUALIDADES = {
 
 LADO_MINIATURA = 320          # miniaturas usadas no mosaico da capa
 DPI_MOSAICO = 150
+
+
+class _PublicationLock:
+    """Weak-referenceable holder for one destination's publication lock."""
+
+    __slots__ = ("lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+
+
+_PUBLICATION_LOCKS: WeakValueDictionary[str, _PublicationLock] = WeakValueDictionary()
+_PUBLICATION_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass
@@ -380,6 +394,21 @@ def _new_sibling_temp(destination: str) -> str:
     return path
 
 
+def _canonical_destination(destination: str) -> str:
+    """Collapse relative, symlink and Windows case aliases to one lock key."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(destination)))
+
+
+def _publication_lock(destination: str) -> _PublicationLock:
+    key = _canonical_destination(destination)
+    with _PUBLICATION_LOCKS_GUARD:
+        holder = _PUBLICATION_LOCKS.get(key)
+        if holder is None:
+            holder = _PublicationLock()
+            _PUBLICATION_LOCKS[key] = holder
+        return holder
+
+
 def exportar(
     config: Config,
     plan: BookPlan,
@@ -414,7 +443,11 @@ def exportar(
         _validate_export(temporary, len(plan.pages) + int(cover_rendered))
         if _cancelled(cancelar):
             raise Cancelado()
-        os.replace(temporary, destination)
+        publication = _publication_lock(destination)
+        with publication.lock:
+            if _cancelled(cancelar):
+                raise Cancelado()
+            os.replace(temporary, destination)
     finally:
         if doc is not None:
             doc.fechar()

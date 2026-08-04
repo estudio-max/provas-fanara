@@ -3,8 +3,10 @@ from __future__ import annotations
 import io
 import os
 from concurrent.futures import ThreadPoolExecutor
+import gc
 from pathlib import Path
 import threading
+import time
 
 import pymupdf
 import pytest
@@ -217,7 +219,9 @@ def test_cancellation_after_atomic_replace_returns_success(tmp_path: Path, image
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_concurrent_exports_use_distinct_owned_sibling_temps(tmp_path: Path, image_factory, monkeypatch):
+def test_repeated_same_destination_exports_serialize_only_publication(
+    tmp_path: Path, image_factory, monkeypatch
+):
     from provas import motor
 
     path = image_factory("concurrent.jpg", size=(200, 300))
@@ -228,6 +232,8 @@ def test_concurrent_exports_use_distinct_owned_sibling_temps(tmp_path: Path, ima
     real_validate = motor._validate_export
     temp_paths: list[str] = []
     lock = threading.Lock()
+    active_destinations: set[str] = set()
+    real_replace = os.replace
 
     def synchronized_validation(temp_path, expected_pages):
         real_validate(temp_path, expected_pages)
@@ -237,11 +243,76 @@ def test_concurrent_exports_use_distinct_owned_sibling_temps(tmp_path: Path, ima
 
     monkeypatch.setattr(motor, "_validate_export", synchronized_validation)
 
+    def reject_overlapping_replace(source, destination):
+        canonical = os.path.normcase(os.path.realpath(os.path.abspath(destination)))
+        with lock:
+            if canonical in active_destinations:
+                raise PermissionError(5, "overlapping publication", destination)
+            active_destinations.add(canonical)
+        try:
+            time.sleep(0.015)
+            real_replace(source, destination)
+        finally:
+            with lock:
+                active_destinations.remove(canonical)
+
+    monkeypatch.setattr(motor.os, "replace", reject_overlapping_replace)
+
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(motor.exportar, config, plan) for _ in range(2)]
-        results = [future.result(timeout=10) for future in futures]
+        results = []
+        for _ in range(12):
+            futures = [executor.submit(motor.exportar, config, plan) for _ in range(2)]
+            results.extend(future.result(timeout=10) for future in futures)
 
     assert all(result.saida == str(output) for result in results)
-    assert len(set(temp_paths)) == 2
+    assert len(set(temp_paths)) == 24
     assert all(Path(path).parent == tmp_path and Path(path).suffix == ".tmp" for path in temp_paths)
+    assert not list(tmp_path.glob("*.tmp"))
+    gc.collect()
+    assert not motor._PUBLICATION_LOCKS
+    if os.name == "nt":
+        assert motor._canonical_destination(str(output).upper()) == motor._canonical_destination(str(output))
+
+
+def test_distinct_destinations_publish_independently(tmp_path: Path, image_factory, monkeypatch):
+    from provas import motor
+
+    path = image_factory("parallel.jpg", size=(200, 300))
+    plan = BookPlan(42, "fotolivro", (), (PagePlan(1, "single-portrait", (str(path),), "opening"),))
+    configs = [
+        motor.Config(str(tmp_path), saida=str(tmp_path / f"distinct-{index}.pdf"), capa_mosaico=False)
+        for index in range(2)
+    ]
+    barrier = threading.Barrier(2)
+    real_validate = motor._validate_export
+    real_replace = os.replace
+    guard = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def synchronized_validation(temp_path, expected_pages):
+        real_validate(temp_path, expected_pages)
+        barrier.wait(timeout=5)
+
+    def observe_replace(source, destination):
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.04)
+            real_replace(source, destination)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(motor, "_validate_export", synchronized_validation)
+    monkeypatch.setattr(motor.os, "replace", observe_replace)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda config: motor.exportar(config, plan), configs))
+
+    assert len(results) == 2
+    assert max_active == 2
+    assert all(Path(config.saida).exists() for config in configs)
     assert not list(tmp_path.glob("*.tmp"))
