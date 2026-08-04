@@ -24,8 +24,7 @@ class PhotoGroup:
 
 def _cover_value(photo: PhotoInfo, seen_groups: set[int]) -> float:
     diversity = 0.18 if photo.similarity_group not in seen_groups else 0.0
-    balanced_exposure = 1.0 - abs(photo.exposure - 0.5) * 2
-    return photo.quality * 0.62 + photo.sharpness * 0.16 + photo.density * 0.10 + balanced_exposure * 0.12 + diversity
+    return photo.quality * 0.62 + photo.sharpness * 0.16 + photo.density * 0.10 + photo.exposure * 0.12 + diversity
 
 
 def score_cover(items: Iterable[PhotoInfo]) -> list[PhotoInfo]:
@@ -75,20 +74,32 @@ def _different_group(candidate: PhotoInfo, selected: list[PhotoInfo]) -> float:
     return float(all(candidate.similarity_group != photo.similarity_group for photo in selected))
 
 
-def _take_adjacent_complements(remaining: list[PhotoInfo], size: int) -> list[PhotoInfo]:
-    """Keep one source-adjacent anchor and diversify it within an eight-photo window."""
-    selected = [remaining.pop(0)]
+def _take_adjacent_complements(
+    remaining: list[PhotoInfo], size: int, output_start: int
+) -> list[PhotoInfo]:
+    """Diversify a local group without ever moving a source item more than eight slots."""
+    selected: list[PhotoInfo] = []
     while len(selected) < size:
-        candidates = remaining[:8]
+        output_position = output_start + len(selected)
+        candidates = [
+            photo for photo in remaining
+            if abs(photo.index - output_position) <= 8
+        ]
         if not candidates:
-            break
+            raise ValueError("Cannot satisfy the eight-position narrative movement limit")
+
+        due = [photo for photo in candidates if photo.index <= output_position - 8]
+        if due:
+            candidates = due
+        elif not selected and remaining[0] in candidates:
+            candidates = [remaining[0]]
 
         def value(candidate: PhotoInfo) -> tuple[float, float, int, str]:
-            distance = remaining.index(candidate)
+            distance = abs(candidate.index - output_position)
             contrast = max(
                 abs(candidate.density - photo.density) + abs(candidate.exposure - photo.exposure)
                 for photo in selected
-            )
+            ) if selected else 0.0
             return (_different_group(candidate, selected), contrast, -distance, candidate.id)
 
         choice = max(candidates, key=value)
@@ -111,8 +122,10 @@ def agrupar_fotos(items: Iterable[PhotoInfo], seed: int) -> tuple[PhotoGroup, ..
     remaining = [photo for photo in ordered if photo.id not in {opening.id, ending.id}]
 
     groups = [PhotoGroup((opening.id,), "opening", "airy")]
+    output_position = 1
     for size in _middle_sizes(len(remaining), rng):
-        selection = _take_adjacent_complements(remaining, size)
+        selection = _take_adjacent_complements(remaining, size, output_position)
+        output_position += size
         density = "dense" if size == 4 else "balanced" if size == 2 else "airy"
         role = "sequence" if size > 1 else "pause"
         groups.append(PhotoGroup(tuple(photo.id for photo in selection), role, density))

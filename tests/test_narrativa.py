@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+import random
 
 import pytest
 
@@ -104,3 +105,46 @@ def test_score_cover_is_deterministic_and_favours_quality_with_diversity():
     assert ranked == score_cover(items)
     assert ranked[0].id == "p0"
     assert len({photo.id for photo in ranked}) == len(items)
+
+
+def test_agrupar_fotos_never_moves_adversarial_local_candidates_beyond_eight_positions():
+    from provas.narrativa import agrupar_fotos
+
+    values = random.Random(20260803)
+    signals = list(zip(*[[values.random() for _ in range(15)] for _ in range(4)]))
+    items = [
+        PhotoInfo(
+            id=f"p{index}", path=f"p{index}.jpg", label=f"P {index}", width=120, height=180,
+            index=index, sharpness=signals[index][3], exposure=signals[index][0], density=signals[index][1],
+            quality=signals[index][2], similarity_group=None,
+        )
+        for index in range(15)
+    ]
+
+    groups = agrupar_fotos(items, seed=157)
+    ordered_ids = [photo_id for group in groups for photo_id in group.photo_ids]
+    positions = {photo_id: output for output, photo_id in enumerate(ordered_ids)}
+
+    assert positions["p4"] != 13  # Before the fix, p4 was emitted at output position 13.
+    assert all(abs(photo.index - positions[photo.id]) <= 8 for photo in items)
+
+
+def test_score_cover_promotes_distinct_similarity_group_after_a_leader():
+    from provas.narrativa import score_cover
+
+    leader = PhotoInfo("leader", "leader.jpg", "Leader", 120, 180, 0, quality=0.90, exposure=0.8, similarity_group=1)
+    duplicate = PhotoInfo("duplicate", "duplicate.jpg", "Duplicate", 120, 180, 1, quality=0.89, exposure=0.8, similarity_group=1)
+    distinct = PhotoInfo("distinct", "distinct.jpg", "Distinct", 120, 180, 2, quality=0.85, exposure=0.8, similarity_group=2)
+
+    ranked = score_cover([leader, duplicate, distinct])
+
+    assert [photo.id for photo in ranked[:2]] == ["leader", "distinct"]
+
+
+def test_score_cover_rewards_higher_exposure_quality_not_midpoint_brightness():
+    from provas.narrativa import score_cover
+
+    midpoint = PhotoInfo("mid", "mid.jpg", "Mid", 120, 180, 0, quality=0.70, exposure=0.5, similarity_group=1)
+    well_exposed = PhotoInfo("high", "high.jpg", "High", 120, 180, 1, quality=0.70, exposure=0.9, similarity_group=2)
+
+    assert score_cover([midpoint, well_exposed])[0].id == "high"
