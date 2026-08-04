@@ -91,6 +91,62 @@ def test_validate_plan_reports_broken_invariants_without_repairing_input():
     assert any("repeat" in error for error in errors)
 
 
+def test_validate_plan_reports_an_invalid_mode_directly():
+    from provas.compositor import validate_plan
+    from provas.modelos import BookPlan
+
+    errors = validate_plan(BookPlan(3, "rascunho", (), ()), ())
+
+    assert errors == ("Unsupported mode: rascunho",)
+
+
+def test_validate_plan_reports_template_orientation_incompatibility():
+    from provas.compositor import validate_plan
+    from provas.modelos import BookPlan, PagePlan
+
+    squares = [
+        PhotoInfo("s0", "s0.jpg", "S 0", 200, 200, 0),
+        PhotoInfo("s1", "s1.jpg", "S 1", 200, 200, 1),
+    ]
+    plan = BookPlan(3, "prova", (), (PagePlan(1, "pair-portraits", ("s0", "s1"), "opening"),))
+
+    errors = validate_plan(plan, squares)
+
+    assert any("orientation" in error for error in errors)
+
+
+def test_template_candidates_keep_square_and_mixed_groups_orientation_compatible():
+    from provas.compositor import _template_candidates
+    from provas.narrativa import PhotoGroup
+
+    items = {
+        "s0": PhotoInfo("s0", "s0.jpg", "S 0", 200, 200, 0),
+        "s1": PhotoInfo("s1", "s1.jpg", "S 1", 200, 200, 1),
+        "p": PhotoInfo("p", "p.jpg", "P", 200, 300, 2),
+        "l": PhotoInfo("l", "l.jpg", "L", 300, 200, 3),
+    }
+
+    square_candidates = _template_candidates(PhotoGroup(("s0", "s1"), "sequence", "balanced"), items, None)
+    mixed_candidates = _template_candidates(PhotoGroup(("p", "l"), "sequence", "balanced"), items, None)
+    exhausted_square = _template_candidates(PhotoGroup(("s0", "s1"), "sequence", "balanced"), items, "pair-squares")
+
+    assert square_candidates and all("square" in template.orientations for template in square_candidates)
+    assert mixed_candidates and all("mixed" in template.orientations for template in mixed_candidates)
+    assert exhausted_square == ()
+
+
+def test_compose_uses_only_square_templates_for_a_square_narrative():
+    from provas.compositor import compose, validate_plan
+    from provas.templates import catalog
+
+    squares = [PhotoInfo(f"s{index}", f"s{index}.jpg", f"S {index}", 200, 200, index) for index in range(5)]
+    plan = compose(squares, mode="prova", seed=5)
+    templates = {template.id: template for template in catalog()}
+
+    assert validate_plan(plan, squares) == ()
+    assert all("square" in templates[page.template_id].orientations for page in plan.pages)
+
+
 def test_cover_selection_keeps_manual_ids_in_order_and_is_stable():
     from provas.compositor import selecionar_capa
 
@@ -103,6 +159,15 @@ def test_cover_selection_keeps_manual_ids_in_order_and_is_stable():
     assert selected[:2] == ("p13", "p2")
     assert len(selected) == len(set(selected)) == 9
     assert all(photo_id in {photo.id for photo in photos} for photo_id in selected)
+
+
+def test_cover_selection_rejects_more_than_twelve_valid_manual_ids():
+    from provas.compositor import selecionar_capa
+
+    photos = _photos(20)
+
+    with pytest.raises(ValueError, match="at most 12"):
+        selecionar_capa(photos, quantidade=9, manual_ids=tuple(photo.id for photo in photos[:13]))
 
 
 def test_cover_selection_diversifies_groups_and_source_sequence():

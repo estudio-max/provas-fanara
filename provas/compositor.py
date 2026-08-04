@@ -20,14 +20,18 @@ def _ordered(photos: Iterable[PhotoInfo]) -> list[PhotoInfo]:
     return items
 
 
-def _orientation(group: PhotoGroup, by_id: dict[str, PhotoInfo]) -> str:
+def _orientation_for_ids(photo_ids: Iterable[str], by_id: dict[str, PhotoInfo]) -> str:
     kinds = {
         "portrait" if by_id[photo_id].height > by_id[photo_id].width
         else "landscape" if by_id[photo_id].width > by_id[photo_id].height
         else "square"
-        for photo_id in group.photo_ids
+        for photo_id in photo_ids
     }
     return next(iter(kinds)) if len(kinds) == 1 else "mixed"
+
+
+def _orientation(group: PhotoGroup, by_id: dict[str, PhotoInfo]) -> str:
+    return _orientation_for_ids(group.photo_ids, by_id)
 
 
 def _template_candidates(group: PhotoGroup, by_id: dict[str, PhotoInfo], previous_id: str | None) -> tuple[Template, ...]:
@@ -36,14 +40,7 @@ def _template_candidates(group: PhotoGroup, by_id: dict[str, PhotoInfo], previou
         template for template in compatible_templates(descriptor, previous_id)
         if len(template.slots) == len(group.photo_ids)
     )
-    if candidates:
-        return candidates
-    # A square pair has no dedicated template yet.  It still belongs in an
-    # uncropped page, so use a curated count-compatible fallback.
-    return tuple(
-        template for template in catalog()
-        if len(template.slots) == len(group.photo_ids) and template.id != previous_id
-    )
+    return candidates
 
 
 def _template_weight(template: Template, group: PhotoGroup, recent: tuple[str, ...]) -> float:
@@ -66,6 +63,8 @@ def selecionar_capa(photos: Iterable[PhotoInfo], quantidade: int, manual_ids: It
     for photo_id in manual_ids:
         if photo_id in by_id and photo_id not in selected:
             selected.append(photo_id)
+    if len(selected) > 12:
+        raise ValueError("A cover supports at most 12 manual ids")
     if len(items) <= 5:
         selected.extend(photo.id for photo in items if photo.id not in selected)
         return tuple(selected)
@@ -101,6 +100,7 @@ def validate_plan(plan: BookPlan, photos: Iterable[PhotoInfo]) -> tuple[str, ...
     items = list(photos)
     source_ids = [photo.id for photo in items]
     source_set = set(source_ids)
+    by_id = {photo.id: photo for photo in items}
     templates = {template.id: template for template in catalog()}
     if plan.mode not in _MODES:
         errors.append(f"Unsupported mode: {plan.mode}")
@@ -125,6 +125,10 @@ def validate_plan(plan: BookPlan, photos: Iterable[PhotoInfo]) -> tuple[str, ...
             continue
         if len(template.slots) != len(page.photo_ids):
             errors.append(f"Template {template.id} has an incompatible photo count")
+        elif all(photo_id in by_id for photo_id in page.photo_ids):
+            orientation = _orientation_for_ids(page.photo_ids, by_id)
+            if orientation not in template.orientations:
+                errors.append(f"Template {template.id} has incompatible {orientation} orientation")
         dense_run = dense_run + 1 if template.density_class == "dense" else 0
         if dense_run > 2:
             errors.append("No more than two dense pages may be adjacent")
