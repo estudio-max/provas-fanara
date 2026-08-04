@@ -8,5 +8,6 @@ build/
 config.json
 tmp/
 .superpowers/
+.worktrees/
 *.pdf
 *.fotolivro.json
