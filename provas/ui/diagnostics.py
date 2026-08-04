@@ -12,6 +12,8 @@ from ..projeto import DiagnosticSummary
 class DiagnosticsPanel(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.failed_count = 0
+        self.failure_details: tuple[tuple[str, str], ...] = ()
         self.setObjectName("diagnosticsPanel")
         self.setFixedWidth(235)
         layout = QVBoxLayout(self)
@@ -60,26 +62,46 @@ class DiagnosticsPanel(QFrame):
         layout.addWidget(row)
         return value
 
-    def set_plan(self, plan: BookPlan, *, failed_count: int = 0) -> None:
+    def set_plan(
+        self,
+        plan: BookPlan,
+        *,
+        failed_count: int = 0,
+        failures: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        self.failure_details = tuple(failures)
+        self.failed_count = max(failed_count, len(self.failure_details))
         distribution = Counter(len(page.photo_ids) for page in plan.pages)
         photos = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
         impact = distribution[1]
         self.summary_label.setText(
             "A sequência está pronta para revisão."
-            if not failed_count
-            else f"{failed_count} fotografia(s) precisam de atenção."
+            if not self.failed_count
+            else f"{self.failed_count} fotografia(s) precisam de atenção."
         )
         self.pages_value.setText(str(len(plan.pages)))
         self.photos_value.setText(str(photos))
         self.impact_value.setText(str(impact))
         self.order_value.setText("Calculada no projeto")
-        self.warnings_label.setText(
-            "Nenhum alerta no momento."
-            if not failed_count
-            else "Confira os arquivos que não puderam ser lidos e tente novamente."
-        )
+        if self.failure_details:
+            visible = [f"{name} — não pôde ser lida" for name, _reason in self.failure_details[:3]]
+            remaining = len(self.failure_details) - len(visible)
+            if remaining:
+                visible.append(f"e mais {remaining} fotografia(s)")
+            self.warnings_label.setText("\n".join(visible))
+            self.warnings_label.setToolTip(
+                "\n".join(f"{name}: {reason}" for name, reason in self.failure_details)
+            )
+        else:
+            self.warnings_label.setText(
+                "Nenhum alerta no momento."
+                if not self.failed_count
+                else "Confira os arquivos que não puderam ser lidos e tente novamente."
+            )
+            self.warnings_label.setToolTip("")
 
     def set_summary(self, summary: DiagnosticSummary) -> None:
+        self.failed_count = summary.failed_count
         self.pages_value.setText(str(summary.page_count))
         self.photos_value.setText(str(summary.valid_count))
         self.impact_value.setText(str(summary.distribution.get(1, 0)))

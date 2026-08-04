@@ -4,17 +4,73 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QIcon, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
+
+from .. import imagens
+from .preview_grid import _to_qimage
+
+
+class ThumbnailListWidget(QListWidget):
+    """Load icons only for photo rows that intersect the list viewport."""
+
+    _PATH_ROLE = int(Qt.ItemDataRole.UserRole)
+    _LOADED_ROLE = _PATH_ROLE + 1
+
+    def __init__(self, paths: Iterable[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setIconSize(QSize(88, 64))
+        self.setUniformItemSizes(True)
+        for path in paths:
+            item = QListWidgetItem(os.path.basename(path))
+            item.setData(self._PATH_ROLE, path)
+            item.setData(self._LOADED_ROLE, False)
+            self.addItem(item)
+        self.verticalScrollBar().valueChanged.connect(
+            lambda _value: QTimer.singleShot(0, self, self._load_visible)
+        )
+
+    @property
+    def loaded_thumbnail_count(self) -> int:
+        return sum(bool(self.item(index).data(self._LOADED_ROLE)) for index in range(self.count()))
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self, self._load_visible)
+
+    def _load_visible(self) -> None:
+        viewport_rect = self.viewport().rect()
+        for index in range(self.count()):
+            item = self.item(index)
+            if item.data(self._LOADED_ROLE) or not viewport_rect.intersects(self.visualItemRect(item)):
+                continue
+            path = str(item.data(self._PATH_ROLE))
+            source = None
+            thumbnail = None
+            try:
+                label = os.path.splitext(os.path.basename(path))[0]
+                source = imagens.abrir(imagens.Foto(path, label))
+                thumbnail = imagens.redimensionar(source, 176)
+                item.setIcon(QIcon(QPixmap.fromImage(_to_qimage(thumbnail))))
+            except Exception:
+                continue
+            finally:
+                if thumbnail is not None and thumbnail is not source:
+                    thumbnail.close()
+                if source is not None:
+                    source.close()
+            item.setData(self._LOADED_ROLE, True)
 
 
 class CoverDialog(QDialog):
@@ -52,10 +108,11 @@ class CoverDialog(QDialog):
         selected_title = QLabel("Na capa")
         selected_title.setObjectName("sectionTitle")
         selected_column.addWidget(selected_title)
-        self.selected_list = QListWidget()
+        self.selected_list = ThumbnailListWidget(self._selected)
         self.selected_list.setAccessibleName("Fotografias selecionadas para a capa")
-        for index, photo_id in enumerate(self._selected, start=1):
-            self.selected_list.addItem(f"{index}. {os.path.basename(photo_id)}")
+        for index in range(self.selected_list.count()):
+            item = self.selected_list.item(index)
+            item.setText(f"{index + 1}. {item.text()}")
         selected_column.addWidget(self.selected_list)
         columns.addLayout(selected_column, 1)
 
@@ -63,10 +120,8 @@ class CoverDialog(QDialog):
         remaining_title = QLabel("Fotografias disponíveis")
         remaining_title.setObjectName("sectionTitle")
         remaining_column.addWidget(remaining_title)
-        self.remaining_list = QListWidget()
+        self.remaining_list = ThumbnailListWidget(self._remaining)
         self.remaining_list.setAccessibleName("Fotografias disponíveis para substituição")
-        for photo_id in self._remaining:
-            self.remaining_list.addItem(os.path.basename(photo_id))
         remaining_column.addWidget(self.remaining_list)
         columns.addLayout(remaining_column, 1)
         root.addLayout(columns, 1)

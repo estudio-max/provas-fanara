@@ -62,7 +62,7 @@ class AnalysisWorker(EditorialWorker):
         config: Config,
         cancel_event: threading.Event | None = None,
         *,
-        operation: Callable[..., object] = motor.gerar_plano,
+        operation: Callable[..., object] = motor.analisar_plano,
     ) -> None:
         super().__init__(cancel_event)
         self.config = config

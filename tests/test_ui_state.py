@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PIL import Image
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
 
 from provas.modelos import BookPlan, PagePlan
@@ -157,6 +158,34 @@ def test_preview_ready_populates_roles_and_enables_editing_actions(qapp, tmp_pat
     assert "prévia" in window.status_message.lower()
 
 
+def test_preview_places_cover_before_internal_page_roles(qapp, tmp_path: Path, plan):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    previews = tuple(Image.new("RGB", (420, 297)) for _ in range(len(plan.pages) + 1))
+
+    window.apply_preview_ready(previews)
+
+    assert window.preview_grid.thumbnail_count == len(plan.pages) + 1
+    assert window.preview_grid.page_roles == ("Capa", "Abertura", "Encerramento")
+    assert window.preview_grid.page_labels[0] == "Capa"
+
+
+def test_preview_translates_generated_sequence_role(qapp, tmp_path: Path, plan):
+    from provas.ui.preview_grid import PreviewGrid
+
+    sequence = replace(
+        plan,
+        pages=(PagePlan(1, "pair-landscapes", plan.pages[1].photo_ids[:2], "sequence"),),
+    )
+    grid = PreviewGrid()
+    grid.set_previews(sequence, (Image.new("RGB", (420, 297)),))
+
+    assert grid.page_roles == ("Sequência",)
+
+
 def test_ready_hierarchy_keeps_export_as_the_only_primary_action(qapp, tmp_path: Path, plan):
     from provas.ui import MainWindow
 
@@ -253,6 +282,29 @@ def test_export_success_failure_and_empty_states_are_actionable_in_portuguese(
     assert window.status_kind == "error"
 
 
+def test_recoverable_analysis_failures_reach_editorial_diagnostics(qapp, tmp_path: Path, plan):
+    from provas.modelos import PhotoInfo
+    from provas.ui import MainWindow
+
+    photo = PhotoInfo(
+        id=plan.pages[0].photo_ids[0],
+        path=plan.pages[0].photo_ids[0],
+        label="D61_0001",
+        width=200,
+        height=300,
+        index=0,
+    )
+    failures = (("corrompida.jpg", "arquivo JPEG inválido"),)
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+
+    window.apply_analysis_result(plan, photos=(photo,), failures=failures)
+
+    assert window.diagnostics.failed_count == 1
+    assert "corrompida.jpg" in window.diagnostics.warnings_label.text()
+    assert "JPEG inválido" in window.diagnostics.warnings_label.toolTip()
+
+
 def test_workers_publish_uniform_signals_and_honor_cancellation(qapp, tmp_path: Path, plan):
     from provas.ui import AnalysisWorker, ExportWorker, PreviewWorker
 
@@ -305,6 +357,26 @@ def test_resize_hides_diagnostics_before_sacrificing_preview(qapp):
     window.close()
 
 
+def test_1366_by_768_at_125_percent_fits_logical_work_area(qapp):
+    from provas.ui import MainWindow
+
+    logical_width = round(1366 / 1.25)
+    logical_height = round(768 / 1.25)
+    window = MainWindow()
+    window.resize(logical_width, logical_height)
+    window.show()
+    for _ in range(3):
+        qapp.processEvents()
+
+    assert window.size().width() == logical_width
+    assert window.size().height() == logical_height
+    assert window.minimumHeight() <= logical_height
+    assert window.diagnostics.isHidden()
+    assert window.sidebar.cover_button.geometry().bottom() < window.sidebar.height()
+    assert window.export_button.geometry().bottom() <= window.top_bar.height()
+    window.close()
+
+
 def test_zoomed_out_narrow_grid_never_clips_a_thumbnail(qapp, tmp_path: Path):
     from provas.ui import MainWindow
 
@@ -331,6 +403,35 @@ def test_zoomed_out_narrow_grid_never_clips_a_thumbnail(qapp, tmp_path: Path):
     window.close()
 
 
+def test_thumbnail_pixmaps_materialize_only_when_cards_intersect_viewport(qapp, tmp_path: Path):
+    from provas.ui import MainWindow
+
+    pages = tuple(
+        PagePlan(number, "single-landscape", (str(tmp_path / f"lazy-{number}.jpg"),), "narrative")
+        for number in range(1, 31)
+    )
+    plan = BookPlan(4, "prova", (), pages)
+    window = MainWindow()
+    window.resize(920, 560)
+    window.show()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    window.apply_preview_ready(tuple(Image.new("RGB", (420, 297)) for _ in pages))
+    for _ in range(4):
+        qapp.processEvents()
+
+    initially_loaded = window.preview_grid.materialized_thumbnail_count
+    assert 0 < initially_loaded < len(pages)
+
+    scrollbar = window.preview_grid.scroll_area.verticalScrollBar()
+    scrollbar.setValue(scrollbar.maximum())
+    for _ in range(4):
+        qapp.processEvents()
+
+    assert initially_loaded < window.preview_grid.materialized_thumbnail_count < len(pages)
+    window.close()
+
+
 def test_minimum_geometry_keeps_preview_and_export_clear_with_long_status(qapp):
     from provas.ui import MainWindow
 
@@ -352,6 +453,8 @@ def test_minimum_geometry_keeps_preview_and_export_clear_with_long_status(qapp):
     assert window.save_button.geometry().right() < window.export_button.geometry().left()
     assert window.export_button.geometry().right() <= window.top_bar.contentsRect().right()
     assert window.export_button.height() >= 44
+    assert window.status_label.toolTip() == window.status_message
+    assert window.status_label.text() != window.status_message
     window.close()
 
 
@@ -386,6 +489,23 @@ def test_cover_dialog_and_qualitative_diagnostic_use_semantic_text_roles(qapp, p
     assert diagnostics.order_value.objectName() == "metricTextValue"
 
 
+def test_cover_dialog_loads_visible_photo_thumbnails(qapp, image_factory):
+    from provas.ui import CoverDialog
+
+    selected = tuple(str(image_factory(f"selecionada-{index}.jpg")) for index in range(2))
+    remaining = tuple(str(image_factory(f"disponivel-{index}.jpg")) for index in range(4))
+    dialog = CoverDialog(selected, remaining)
+    dialog.show()
+    for _ in range(4):
+        qapp.processEvents()
+
+    assert dialog.selected_list.loaded_thumbnail_count > 0
+    assert dialog.remaining_list.loaded_thumbnail_count > 0
+    assert not dialog.selected_list.item(0).icon().isNull()
+    assert not dialog.remaining_list.item(0).icon().isNull()
+    dialog.close()
+
+
 def test_close_requests_cancellation_without_waiting_for_worker(qapp):
     from provas.ui import MainWindow
 
@@ -398,3 +518,41 @@ def test_close_requests_cancellation_without_waiting_for_worker(qapp):
 
     assert cancel_event.is_set()
     assert time.perf_counter() - started < 0.1
+
+
+def test_close_waits_asynchronously_for_active_qthreads(qapp, tmp_path: Path):
+    from provas import motor
+    from provas.ui import AnalysisWorker, MainWindow
+
+    window = MainWindow()
+    window.show()
+    cancel_event = threading.Event()
+
+    def cooperative_operation(config, progresso, cancelar):
+        while not cancelar.is_set():
+            time.sleep(0.002)
+        time.sleep(0.02)
+        raise motor.Cancelado()
+
+    window.begin_operation("Analisando fotografias…", cancel_event)
+    window._start_worker(
+        AnalysisWorker(Config(str(tmp_path)), cancel_event, operation=cooperative_operation),
+        lambda _result: None,
+    )
+    for _ in range(3):
+        qapp.processEvents()
+
+    started = time.perf_counter()
+    window.close()
+
+    assert cancel_event.is_set()
+    assert window.isVisible()
+    assert time.perf_counter() - started < 0.1
+
+    deadline = time.perf_counter() + 2
+    while window.isVisible() and time.perf_counter() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+
+    assert not window.isVisible()
+    assert not window._threads

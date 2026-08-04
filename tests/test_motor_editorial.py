@@ -151,6 +151,81 @@ def test_watermark_is_baked_into_proof_jpeg_only(tmp_path: Path, image_factory):
     assert clean_difference is None
 
 
+def test_proof_without_external_logo_uses_discreet_text_watermark(tmp_path: Path, image_factory):
+    from provas import motor
+
+    path = image_factory("sem-logo.jpg", size=(600, 400), color=(70, 70, 70))
+    page = PagePlan(1, "single-landscape", (str(path),), "opening")
+    proof = BookPlan(5, "prova", (), (page,))
+    clean = BookPlan(5, "fotolivro", (), (page,))
+    config = motor.Config(str(tmp_path), logo="", marca_opacidade=0.24)
+
+    proof_assets, _ = motor._prepare_render_assets(config.com_padroes(), proof)
+    clean_assets, _ = motor._prepare_render_assets(config.com_padroes(), clean)
+
+    with Image.open(io.BytesIO(proof_assets[str(path)].jpeg)) as marked, Image.open(
+        io.BytesIO(clean_assets[str(path)].jpeg)
+    ) as unmarked:
+        difference = ImageChops.difference(marked.convert("RGB"), unmarked.convert("RGB"))
+        assert difference.getbbox() is not None
+        changed = sum(pixel != (0, 0, 0) for pixel in difference.get_flattened_data())
+        assert changed > marked.width * marked.height * 0.01
+
+
+def test_textual_watermark_uses_ascii_fallback_when_no_unicode_font_is_available(monkeypatch):
+    from provas import imagens
+
+    monkeypatch.setattr(imagens, "_FONT_CANDIDATES", ())
+
+    _, label = imagens._fonte_marca("PROVA PARA SELEÇÃO")
+
+    assert label == "PROVA PARA SELECAO"
+
+
+def test_analysis_plan_result_keeps_recoverable_failure_details(tmp_path: Path, image_factory):
+    from provas import motor
+
+    image_factory("valida.jpg", size=(200, 300))
+    image_factory("corrompida.jpg", corrupt=True)
+
+    result = motor.analisar_plano(motor.Config(str(tmp_path), modo="prova", semente=9))
+
+    assert result.plan.seed == 9
+    assert len(result.photos) == 1
+    assert result.failures[0][0] == "corrompida.jpg"
+    assert result.failures[0][1]
+
+
+def test_preview_includes_exact_export_cover_before_internal_pages(tmp_path: Path, image_factory):
+    from provas import motor
+
+    paths = tuple(
+        image_factory(f"capa-{index}.jpg", size=(300, 200), color=(60 + index * 20, 80, 100))
+        for index in range(1, 5)
+    )
+    plan = BookPlan(
+        6,
+        "fotolivro",
+        tuple(map(str, paths)),
+        (PagePlan(1, "quad-grid", tuple(map(str, paths)), "opening"),),
+    )
+    output = tmp_path / "com-capa.pdf"
+    config = motor.Config(
+        str(tmp_path), saida=str(output), titulo="Capa coerente", modo="fotolivro"
+    )
+
+    thumbnails = motor.gerar_preview(config, plan, width=420)
+    motor.exportar(config, plan)
+
+    assert len(thumbnails) == len(plan.pages) + 1
+    with pymupdf.open(output) as pdf:
+        assert pdf.page_count == len(thumbnails)
+        scale = 420 / pdf[0].rect.width
+        rendered = pdf[0].get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+    assert thumbnails[0].size == (rendered.width, rendered.height)
+    assert thumbnails[0].tobytes() == rendered.samples
+
+
 def test_proof_and_clean_export_use_the_same_unwatermarked_cover_image(tmp_path: Path, image_factory):
     from provas import motor
 

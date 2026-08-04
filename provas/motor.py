@@ -92,6 +92,15 @@ class Resultado:
     falhas: list[tuple[str, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PlanAnalysisResult:
+    """Plan plus recoverable source details needed by the editing desk."""
+
+    plan: BookPlan
+    photos: tuple[PhotoInfo, ...]
+    failures: tuple[tuple[str, str], ...]
+
+
 class Cancelado(Exception):
     pass
 
@@ -152,15 +161,25 @@ def _analisar_config(
     return result
 
 
-def gerar_plano(config: Config, progresso=None, cancelar: object | None = None) -> BookPlan:
-    """Analyze the source folder and compose the only plan used downstream."""
+def analisar_plano(
+    config: Config,
+    progresso=None,
+    cancelar: object | None = None,
+) -> PlanAnalysisResult:
+    """Analyze once and retain recoverable details beside the composed plan."""
     config = config.com_padroes()
     if config.modo not in {"prova", "fotolivro"}:
         raise ValueError(f"Unsupported mode: {config.modo}")
     _avisar(progresso, 0, 100, "Procurando fotos…", cancelar)
     result = _analisar_config(config, progresso, cancelar)
     _avisar(progresso, 100, 100, "Compondo o fotolivro…", cancelar)
-    return compose(result.photos, config.modo, config.semente, config.cover_ids)
+    plan = compose(result.photos, config.modo, config.semente, config.cover_ids)
+    return PlanAnalysisResult(plan, result.photos, result.failures)
+
+
+def gerar_plano(config: Config, progresso=None, cancelar: object | None = None) -> BookPlan:
+    """Compatibility API returning only the motor-produced editorial plan."""
+    return analisar_plano(config, progresso, cancelar).plan
 
 
 def _proporcao_tipica(fotos, girar: bool, amostra: int = 8) -> float:
@@ -205,15 +224,16 @@ def _prepare_render_assets(
     max_side = max(640, round(max(tema.A4_PAISAGEM) / 72 * dpi))
     watermark = None
     logo_path = config.logo.strip()
-    if (
-        plan.mode == "prova" and config.marca_dagua and config.marca_opacidade > 0
-        and logo_path and os.path.exists(logo_path)
-    ):
-        logo = imagens.carregar_logo(logo_path)
-        try:
-            watermark = imagens.logo_branco(logo)
-        finally:
-            logo.close()
+    if plan.mode == "prova" and config.marca_dagua and config.marca_opacidade > 0:
+        if logo_path and os.path.exists(logo_path):
+            logo = imagens.carregar_logo(logo_path)
+            try:
+                watermark = imagens.logo_branco(logo)
+            finally:
+                logo.close()
+        else:
+            fallback = f"{config.estudio} · PROVA" if config.estudio.strip() else "PROVA PARA SELEÇÃO"
+            watermark = imagens.marca_textual(fallback)
 
     assets: dict[str, documento.RenderAsset] = {}
     total = len(required_ids)
@@ -316,12 +336,32 @@ def gerar_preview(
 ) -> tuple[Image.Image, ...]:
     """Render thumbnails for the supplied plan without composing a replacement."""
     config = config.com_padroes()
-    assets, _ = _prepare_render_assets(config, plan, progresso, cancelar)
+    assets, analysis = _prepare_render_assets(config, plan, progresso, cancelar)
     thumbnails = []
-    total = len(plan.pages)
+    if config.capa_mosaico and plan.cover_photo_ids:
+        _avisar(progresso, 0, max(1, len(plan.pages) + 1), "Renderizando capa…", cancelar)
+        cover_document = _new_editorial_document(config, plan.mode)
+        try:
+            rendered = _render_cover(
+                cover_document,
+                config,
+                plan,
+                {photo.id: photo for photo in analysis.photos},
+            )
+            if rendered:
+                page = cover_document.pdf[0]
+                scale = width / page.rect.width
+                pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+                thumbnails.append(
+                    Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+                )
+        finally:
+            cover_document.fechar()
+    total = len(plan.pages) + len(thumbnails)
     style_fingerprint = _render_style_fingerprint(config, plan.mode)
     for index, page_plan in enumerate(plan.pages, start=1):
-        _avisar(progresso, index - 1, max(1, total), "Renderizando prévia…", cancelar)
+        offset = len(thumbnails)
+        _avisar(progresso, offset + index - 1, max(1, total), "Renderizando prévia…", cancelar)
         thumbnails.append(
             preview.render_page_thumbnail(
                 plan,
@@ -332,7 +372,13 @@ def gerar_preview(
                 style_fingerprint=style_fingerprint,
             )
         )
-        _avisar(progresso, index, max(1, total), f"Prévia… página {index}/{total}", cancelar)
+        _avisar(
+            progresso,
+            offset + index,
+            max(1, total),
+            f"Prévia… página {index}/{len(plan.pages)}",
+            cancelar,
+        )
     return tuple(thumbnails)
 
 
@@ -357,8 +403,11 @@ def _render_cover(
         width = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
         height = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
         cover = capas.gerar_mosaico_editorial(thumbnails, width, height, doc.p)
-        photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
-        doc.capa(_codificar(cover.imagem, 88), photo_count, config.chamada, cover.ancora)
+        try:
+            photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
+            doc.capa(_codificar(cover.imagem, 88), photo_count, config.chamada, cover.ancora)
+        finally:
+            cover.imagem.close()
     finally:
         for thumbnail in thumbnails:
             thumbnail.close()
@@ -485,7 +534,13 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
     caminho_logo = config.logo.strip()
     logo_base = imagens.carregar_logo(caminho_logo) if caminho_logo and os.path.exists(caminho_logo) else None
     usar_marca = config.marca_dagua and config.marca_opacidade > 0
-    marca = imagens.logo_branco(logo_base) if (logo_base and usar_marca) else None
+    marca = (
+        imagens.logo_branco(logo_base)
+        if logo_base is not None and usar_marca
+        else imagens.marca_textual(f"{config.estudio} · PROVA" if config.estudio.strip() else "PROVA PARA SELEÇÃO")
+        if usar_marca
+        else None
+    )
     logo_png, logo_proporcao = None, 1200 / 630
     if logo_base is not None:
         # em fundo escuro o preto do logotipo vira branco; em fundo claro ele fica como é

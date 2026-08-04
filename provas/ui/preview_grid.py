@@ -5,8 +5,8 @@ from collections import OrderedDict
 from typing import Iterable
 
 from PIL import Image
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QImage, QPixmap, QShowEvent
+from PySide6.QtCore import QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -23,9 +23,11 @@ from ..modelos import BookPlan, PagePlan
 
 
 _ROLE_LABELS = {
+    "cover": "Capa",
     "opening": "Abertura",
     "bridge": "Transição",
     "narrative": "Sequência",
+    "sequence": "Sequência",
     "detail": "Detalhe",
     "pause": "Pausa",
     "ending": "Encerramento",
@@ -80,7 +82,7 @@ class LazyPageThumbnail(QFrame):
         layout.addWidget(self.image_label)
 
         footer = QHBoxLayout()
-        number = QLabel(f"Página {page.number}")
+        number = QLabel("Capa" if page.role == "cover" else f"Página {page.number}")
         number.setObjectName("pageNumber")
         role_label = QLabel(role)
         role_label.setObjectName("pageRole")
@@ -111,8 +113,7 @@ class LazyPageThumbnail(QFrame):
         self.image_label.setText("")
         self._loaded = True
 
-    def showEvent(self, event: QShowEvent) -> None:
-        super().showEvent(event)
+    def materialize(self) -> None:
         if not self._loaded:
             self._load_pixmap()
 
@@ -125,6 +126,7 @@ class PreviewGrid(QFrame):
         super().__init__(parent)
         self.setObjectName("previewSurface")
         self._plan: BookPlan | None = None
+        self._entries: tuple[PagePlan, ...] = ()
         self._images: tuple[QImage, ...] = ()
         self._cards: list[LazyPageThumbnail] = []
         self._zoom = 100
@@ -194,6 +196,9 @@ class PreviewGrid(QFrame):
         self.grid.setVerticalSpacing(24)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.scroll_area.setWidget(self.content)
+        self.scroll_area.verticalScrollBar().valueChanged.connect(
+            lambda _value: self._schedule_visible_materialization()
+        )
         root.addWidget(self.scroll_area, 1)
         self.show_empty(self.empty_message)
 
@@ -203,9 +208,15 @@ class PreviewGrid(QFrame):
 
     @property
     def page_roles(self) -> tuple[str, ...]:
-        if self._plan is None:
-            return ()
-        return tuple(_ROLE_LABELS.get(page.role, page.role.capitalize()) for page in self._plan.pages)
+        return tuple(_ROLE_LABELS.get(page.role, page.role.capitalize()) for page in self._entries)
+
+    @property
+    def page_labels(self) -> tuple[str, ...]:
+        return tuple("Capa" if page.role == "cover" else f"Página {page.number}" for page in self._entries)
+
+    @property
+    def materialized_thumbnail_count(self) -> int:
+        return sum(card._loaded for card in self._cards)
 
     @property
     def zoom(self) -> int:
@@ -251,7 +262,11 @@ class PreviewGrid(QFrame):
 
     def set_previews(self, plan: BookPlan, images: Iterable[object]) -> None:
         sources = tuple(images)
-        if len(sources) != len(plan.pages):
+        if len(sources) == len(plan.pages) + 1:
+            entries = (PagePlan(0, "cover", plan.cover_photo_ids, "cover"), *plan.pages)
+        elif len(sources) == len(plan.pages):
+            entries = plan.pages
+        else:
             raise ValueError("A quantidade de prévias não corresponde às páginas do plano.")
         current_scroll = self.scroll_area.verticalScrollBar().value()
         scroll = (
@@ -261,8 +276,9 @@ class PreviewGrid(QFrame):
         )
         self.pending_scroll_position = scroll
         self._plan = plan
+        self._entries = tuple(entries)
         converted: list[QImage] = []
-        for page, source in zip(plan.pages, sources):
+        for page, source in zip(self._entries, sources):
             cache_key = (plan.seed, plan.mode, page.number, page.template_id, page.photo_ids)
             cached = self._pixmap_cache.get(cache_key)
             image = cached if cached is not None else _to_qimage(source)
@@ -274,10 +290,29 @@ class PreviewGrid(QFrame):
         self._images = tuple(converted)
         self._reflow()
         QTimer.singleShot(0, self, lambda: self._restore_scroll(scroll))
+        self._schedule_visible_materialization()
 
     def _restore_scroll(self, value: int) -> None:
         self.pending_scroll_position = value
         self.scroll_area.verticalScrollBar().setValue(value)
+        self._materialize_visible_cards()
+
+    def _schedule_visible_materialization(self) -> None:
+        QTimer.singleShot(0, self, self._materialize_visible_cards)
+
+    def _materialize_visible_cards(self) -> None:
+        if not self._cards:
+            return
+        scrollbar = self.scroll_area.verticalScrollBar()
+        visible = QRect(
+            0,
+            scrollbar.value(),
+            self.scroll_area.viewport().width(),
+            self.scroll_area.viewport().height(),
+        )
+        for card in self._cards:
+            if visible.intersects(card.geometry()):
+                card.materialize()
 
     def _columns(self) -> int:
         margins = self.grid.contentsMargins()
@@ -298,11 +333,15 @@ class PreviewGrid(QFrame):
         columns = self._columns()
         self._laid_out_columns = columns
         card_width = self._card_width()
-        for index, (page, image) in enumerate(zip(self._plan.pages, self._images)):
+        for index, (page, image) in enumerate(zip(self._entries, self._images)):
             role = _ROLE_LABELS.get(page.role, page.role.capitalize())
             card = LazyPageThumbnail(page, role, image, card_width)
             self._cards.append(card)
             self.grid.addWidget(card, index // columns, index % columns)
+            card.show()
+        self.grid.activate()
+        self.content.adjustSize()
+        self._schedule_visible_materialization()
 
     def set_zoom(self, percent: int) -> None:
         value = max(60, min(150, round(percent / 10) * 10))
@@ -327,3 +366,5 @@ class PreviewGrid(QFrame):
             scroll = self.scroll_area.verticalScrollBar().value()
             self._reflow()
             QTimer.singleShot(0, self, lambda: self._restore_scroll(scroll))
+        else:
+            self._schedule_visible_materialization()

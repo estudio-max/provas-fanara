@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QFile, QIODevice, QThread, Qt
+from PySide6.QtCore import QFile, QIODevice, QThread, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..modelos import BookPlan
-from ..motor import Config, Resultado
+from ..modelos import BookPlan, PhotoInfo
+from ..motor import Config, PlanAnalysisResult, Resultado
 from ..projeto import ProjectState, save_project, undo_regeneration
 from .cover_dialog import CoverDialog
 from .diagnostics import DiagnosticsPanel
@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setObjectName("mainWindow")
         self.setWindowTitle("Fotolivro · Mesa de edição")
-        self.setMinimumSize(860, 640)
+        self.setMinimumSize(840, 540)
         self.resize(1366, 768)
 
         self.project_state: ProjectState | None = None
@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self._workers: set[EditorialWorker] = set()
         self._completion: Callable[[object], None] | None = None
         self._closing = False
+        self._analysis_failures: tuple[tuple[str, str], ...] = ()
 
         self._build()
         self._connect()
@@ -173,6 +174,7 @@ class MainWindow(QMainWindow):
         )
         self.project_state = None
         self.previews = ()
+        self._analysis_failures = ()
         self.last_export_path = ""
         self.project_label.setText(title)
         self.sidebar.set_folder(normalized)
@@ -214,7 +216,7 @@ class MainWindow(QMainWindow):
                 previous,
             )
             self.previews = ()
-            self.diagnostics.set_plan(plan)
+            self.diagnostics.set_plan(plan, failures=self._analysis_failures)
             self.set_status("Tipo de saída alterado. Atualize a prévia antes de exportar.", "idle")
         self._sync_actions()
 
@@ -268,12 +270,25 @@ class MainWindow(QMainWindow):
         )
 
     def _analysis_completed(self, result: object) -> None:
-        if not isinstance(result, BookPlan):
+        if isinstance(result, PlanAnalysisResult):
+            self.apply_analysis_result(
+                result.plan,
+                photos=result.photos,
+                failures=result.failures,
+            )
+        elif isinstance(result, BookPlan):
+            self.apply_analysis_result(result)
+        else:
             raise TypeError("O motor não retornou um plano editorial.")
-        self.apply_analysis_result(result)
         self.request_preview()
 
-    def apply_analysis_result(self, plan: BookPlan) -> None:
+    def apply_analysis_result(
+        self,
+        plan: BookPlan,
+        *,
+        photos: tuple[PhotoInfo, ...] = (),
+        failures: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         """Install a motor-produced plan; preview remains a separate state."""
         if self._draft_config is None:
             self._draft_config = Config(
@@ -284,12 +299,17 @@ class MainWindow(QMainWindow):
                 girar_horizontais=False,
             )
         config = replace(self._draft_config, modo=plan.mode, semente=plan.seed)
-        paths = tuple(dict.fromkeys(photo_id for page in plan.pages for photo_id in page.photo_ids))
+        paths = (
+            tuple(photo.path for photo in photos)
+            if photos
+            else tuple(dict.fromkeys(photo_id for page in plan.pages for photo_id in page.photo_ids))
+        )
         self.project_state = ProjectState(config, plan, paths)
+        self._analysis_failures = tuple(failures)
         self.sidebar.set_project_loaded(True)
         self.previews = ()
         self._end_operation()
-        self.diagnostics.set_plan(plan)
+        self.diagnostics.set_plan(plan, failures=self._analysis_failures)
         self.set_status("Análise concluída. Preparando a prévia editorial.", "success")
         self._sync_actions()
 
@@ -331,6 +351,9 @@ class MainWindow(QMainWindow):
         self._start_worker(AnalysisWorker(config, event), self._regeneration_completed)
 
     def _regeneration_completed(self, result: object) -> None:
+        if isinstance(result, PlanAnalysisResult):
+            self._analysis_failures = result.failures
+            result = result.plan
         if not isinstance(result, BookPlan):
             raise TypeError("O motor não retornou uma nova diagramação.")
         self.apply_regenerated_plan(result)
@@ -355,7 +378,7 @@ class MainWindow(QMainWindow):
             self.preview_grid.pending_scroll_position = current_scroll
         self.previews = ()
         self._end_operation()
-        self.diagnostics.set_plan(plan)
+        self.diagnostics.set_plan(plan, failures=self._analysis_failures)
         self.set_status("Nova diagramação criada. A anterior pode ser desfeita.", "success")
         self._sync_actions()
 
@@ -366,7 +389,10 @@ class MainWindow(QMainWindow):
         self.project_state = undo_regeneration(self.project_state)
         self.preview_grid.pending_scroll_position = scroll
         self.previews = ()
-        self.diagnostics.set_plan(self.project_state.plan)
+        self.diagnostics.set_plan(
+            self.project_state.plan,
+            failures=self._analysis_failures,
+        )
         self.set_status("Diagramação anterior restaurada. Atualizando a prévia…", "success")
         self._sync_actions()
         if self.isVisible():
@@ -496,10 +522,20 @@ class MainWindow(QMainWindow):
     def set_status(self, message: str, kind: str = "idle") -> None:
         self.status_message = message
         self.status_kind = kind
-        self.status_label.setText(message)
+        self._refresh_status_text()
         self.status_label.setProperty("kind", kind)
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
+
+    def _refresh_status_text(self) -> None:
+        available = max(80, self.status_label.width() - 24)
+        visible = self.status_label.fontMetrics().elidedText(
+            self.status_message,
+            Qt.TextElideMode.ElideRight,
+            available,
+        )
+        self.status_label.setText(visible)
+        self.status_label.setToolTip(self.status_message if visible != self.status_message else "")
 
     def _sync_actions(self) -> None:
         has_folder = bool(self.folder_path)
@@ -558,9 +594,11 @@ class MainWindow(QMainWindow):
     def _forget_thread(self, thread: QThread, worker: EditorialWorker) -> None:
         self._threads.discard(thread)
         self._workers.discard(worker)
+        if self._closing and not self._threads:
+            QTimer.singleShot(0, self, self.close)
 
     def request_shutdown(self) -> None:
-        """Request cooperative cancellation without waiting in the GUI thread."""
+        """Request cooperative cancellation while leaving Qt's event loop responsive."""
         self._closing = True
         if self._cancel_event is not None:
             self._cancel_event.set()
@@ -571,8 +609,22 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.request_shutdown()
+        if self._threads:
+            event.ignore()
+            self.setEnabled(False)
+            self.set_status("Fechando após cancelar a operação em andamento…", "loading")
+            QTimer.singleShot(5000, self, self._warn_shutdown_delay)
+            return
         event.accept()
+
+    def _warn_shutdown_delay(self) -> None:
+        if self._closing and self._threads:
+            self.set_status(
+                "A operação ainda está finalizando com segurança. A janela continua responsiva.",
+                "loading",
+            )
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.diagnostics.setVisible(self.width() >= self.DIAGNOSTICS_BREAKPOINT)
+        self._refresh_status_text()

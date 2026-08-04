@@ -76,6 +76,12 @@ Requer macOS Monterey (12) ou mais novo.
 """
 
 
+def dados_pyinstaller() -> list[str]:
+    """Bundle the stylesheet at the same package-relative path used at runtime."""
+    source = os.path.join(RAIZ, "provas", "ui", "theme.qss")
+    return ["--add-data", f"{source}{os.pathsep}provas/ui"]
+
+
 def gerar_icone() -> str | None:
     """Ícone neutro: um losango claro sobre fundo grafite, sem marca de estúdio.
 
@@ -144,6 +150,7 @@ def main() -> int:
         "--exclude-module", "PIL.ImageQt", "--exclude-module", "PyQt5",
         "--exclude-module", "PySide2", "--exclude-module", "test",
     ]
+    comando += dados_pyinstaller()
     if icone:
         comando += ["--icon", icone]
     if MAC:
