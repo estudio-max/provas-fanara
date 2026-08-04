@@ -37,7 +37,7 @@ QFrame#previewToolbar {
 }
 
 QLabel#brandMark {
-    background: #D84060;
+    background: #C53252;
     color: #FFFFFF;
     border-radius: 4px;
     min-width: 32px;
@@ -66,7 +66,7 @@ QLabel#mutedText, QLabel#zoomLabel {
 
 QLabel#statusBanner {
     color: #B8B9C1;
-    padding: 6px 10px;
+    padding: 8px 12px;
     border: 1px solid transparent;
     border-radius: 4px;
 }
@@ -121,15 +121,15 @@ QPushButton:disabled {
 
 QPushButton#primaryButton, QPushButton#importantButton {
     min-height: 44px;
-    background: #D84060;
-    border-color: #D84060;
+    background: #C53252;
+    border-color: #C53252;
     color: #FFFFFF;
     font-weight: 600;
 }
 
 QPushButton#primaryButton:hover, QPushButton#importantButton:hover {
-    background: #E34A6A;
-    border-color: #EC6380;
+    background: #CE3657;
+    border-color: #D84060;
 }
 
 QPushButton#primaryButton:pressed, QPushButton#importantButton:pressed {
@@ -190,7 +190,7 @@ QFrame#pageThumbnail {
 }
 
 QLabel#pageImage {
-    color: #777883;
+    color: #9A9BA5;
     background: #202126;
     border: 1px solid #35363D;
     border-radius: 3px;
@@ -233,9 +233,15 @@ QLabel#metricValue {
     font-weight: 600;
 }
 
+QLabel#metricTextValue {
+    color: #DADAE0;
+    font-size: 13px;
+    font-weight: 600;
+}
+
 QScrollBar:vertical {
     background: #15161A;
-    width: 12px;
+    width: 16px;
     margin: 0;
 }
 
@@ -243,7 +249,7 @@ QScrollBar::handle:vertical {
     background: #3A3B43;
     min-height: 36px;
     border-radius: 5px;
-    margin: 2px;
+    margin: 4px;
 }
 
 QScrollBar::handle:vertical:hover {
@@ -288,5 +294,5 @@ QToolTip {
     color: #F1F1F3;
     background: #282930;
     border: 1px solid #4A4B55;
-    padding: 6px;
+    padding: 8px;
 }

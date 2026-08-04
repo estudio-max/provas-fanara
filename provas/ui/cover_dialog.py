@@ -49,7 +49,9 @@ class CoverDialog(QDialog):
         columns = QHBoxLayout()
         columns.setSpacing(16)
         selected_column = QVBoxLayout()
-        selected_column.addWidget(QLabel("Na capa"))
+        selected_title = QLabel("Na capa")
+        selected_title.setObjectName("sectionTitle")
+        selected_column.addWidget(selected_title)
         self.selected_list = QListWidget()
         self.selected_list.setAccessibleName("Fotografias selecionadas para a capa")
         for index, photo_id in enumerate(self._selected, start=1):
@@ -58,7 +60,9 @@ class CoverDialog(QDialog):
         columns.addLayout(selected_column, 1)
 
         remaining_column = QVBoxLayout()
-        remaining_column.addWidget(QLabel("Fotografias disponíveis"))
+        remaining_title = QLabel("Fotografias disponíveis")
+        remaining_title.setObjectName("sectionTitle")
+        remaining_column.addWidget(remaining_title)
         self.remaining_list = QListWidget()
         self.remaining_list.setAccessibleName("Fotografias disponíveis para substituição")
         for photo_id in self._remaining:

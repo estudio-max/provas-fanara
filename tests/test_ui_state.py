@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import replace
@@ -10,10 +11,35 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PIL import Image
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from provas.modelos import BookPlan, PagePlan
 from provas.motor import Config, Resultado
+
+
+def _relative_luminance(color: str) -> float:
+    """WCAG 2.2 relative luminance for an exact six-digit sRGB token."""
+    values = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+        for value in values
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    lighter, darker = sorted(
+        (_relative_luminance(foreground), _relative_luminance(background)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _qss_property(qss: str, selector: str, property_name: str) -> str:
+    start = qss.index(selector)
+    block = qss[qss.index("{", start) + 1:qss.index("}", start)]
+    match = re.search(rf"{re.escape(property_name)}:\s*(#[0-9A-Fa-f]{{6}})", block)
+    assert match is not None, f"{property_name} ausente em {selector}"
+    return match.group(1)
 
 
 @pytest.fixture(scope="session")
@@ -92,6 +118,23 @@ def test_progress_and_cancel_are_stateful_and_non_blocking(qapp):
     assert "cancelamento" in window.status_message.lower()
 
 
+def test_ready_state_clears_completed_operation_controls(qapp, tmp_path: Path, plan):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    window.begin_operation("Preparando a prévia…", threading.Event())
+    window.update_operation_progress(73, "Renderizando página 2")
+
+    window.apply_preview_ready(tuple(Image.new("RGB", (420, 297)) for _ in plan.pages))
+
+    assert window.sidebar.progress_panel.isHidden()
+    assert window.sidebar.progress_bar.value() == 0
+    assert window.sidebar.progress_label.text() == ""
+    assert not window.sidebar.cancel_button.isEnabled()
+
+
 def test_preview_ready_populates_roles_and_enables_editing_actions(qapp, tmp_path: Path, plan):
     from provas.ui import MainWindow
 
@@ -112,6 +155,19 @@ def test_preview_ready_populates_roles_and_enables_editing_actions(qapp, tmp_pat
     assert window.sidebar.cover_button.isEnabled()
     assert window.preview_grid.regenerate_button.isEnabled()
     assert "prévia" in window.status_message.lower()
+
+
+def test_ready_hierarchy_keeps_export_as_the_only_primary_action(qapp, tmp_path: Path, plan):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    window.apply_preview_ready(tuple(Image.new("RGB", (420, 297)) for _ in plan.pages))
+
+    assert window.sidebar.folder_button.text() == "Trocar pasta"
+    assert window.sidebar.folder_button.objectName() == "secondaryButton"
+    assert window.export_button.objectName() == "primaryButton"
 
 
 def test_cover_replacement_keeps_slot_order_and_survives_regeneration(qapp, tmp_path: Path, plan):
@@ -247,6 +303,87 @@ def test_resize_hides_diagnostics_before_sacrificing_preview(qapp):
     assert window.diagnostics.isVisible()
     assert window.preview_grid.width() > window.sidebar.width()
     window.close()
+
+
+def test_zoomed_out_narrow_grid_never_clips_a_thumbnail(qapp, tmp_path: Path):
+    from provas.ui import MainWindow
+
+    pages = tuple(
+        PagePlan(number, "solo-landscape", (str(tmp_path / f"{number}.jpg"),), "narrative")
+        for number in range(1, 7)
+    )
+    plan = BookPlan(4, "prova", (), pages)
+    window = MainWindow()
+    window.resize(913, 640)
+    window.show()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    window.apply_preview_ready(tuple(Image.new("RGB", (420, 297)) for _ in pages))
+    window.preview_grid.set_zoom(60)
+    for _ in range(4):
+        qapp.processEvents()
+
+    grid = window.preview_grid
+    right_margin = grid.grid.contentsMargins().right()
+    first_row = grid._cards[:grid._laid_out_columns]
+    assert grid.content.width() <= grid.scroll_area.viewport().width()
+    assert first_row[-1].geometry().right() + right_margin <= grid.scroll_area.viewport().width()
+    window.close()
+
+
+def test_minimum_geometry_keeps_preview_and_export_clear_with_long_status(qapp):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.resize(860, 640)
+    window.set_status(
+        "Não foi possível concluir a exportação porque a pasta de destino não está disponível. "
+        "Verifique a pasta e tente novamente.",
+        "error",
+    )
+    window.show()
+    for _ in range(3):
+        qapp.processEvents()
+
+    assert window.size().width() == 860
+    assert window.diagnostics.isHidden()
+    assert window.preview_grid.width() >= 560
+    assert window.status_label.geometry().right() < window.save_button.geometry().left()
+    assert window.save_button.geometry().right() < window.export_button.geometry().left()
+    assert window.export_button.geometry().right() <= window.top_bar.contentsRect().right()
+    assert window.export_button.height() >= 44
+    window.close()
+
+
+def test_theme_text_tokens_meet_wcag_contrast():
+    qss = (Path(__file__).parents[1] / "provas" / "ui" / "theme.qss").read_text(encoding="utf-8")
+    normal = _qss_property(
+        qss, "QPushButton#primaryButton, QPushButton#importantButton", "background"
+    )
+    hover = _qss_property(
+        qss,
+        "QPushButton#primaryButton:hover, QPushButton#importantButton:hover",
+        "background",
+    )
+    brand = _qss_property(qss, "QLabel#brandMark", "background")
+    loading_text = _qss_property(qss, "QLabel#pageImage", "color")
+    loading_background = _qss_property(qss, "QLabel#pageImage", "background")
+
+    assert _contrast_ratio("#FFFFFF", normal) >= 4.5
+    assert _contrast_ratio("#FFFFFF", hover) >= 4.5
+    assert _contrast_ratio("#FFFFFF", brand) >= 4.5
+    assert _contrast_ratio(loading_text, loading_background) >= 4.5
+
+
+def test_cover_dialog_and_qualitative_diagnostic_use_semantic_text_roles(qapp, plan):
+    from provas.ui import CoverDialog, DiagnosticsPanel
+
+    dialog = CoverDialog(plan.cover_photo_ids, plan.pages[-1].photo_ids)
+    headings = [label.text() for label in dialog.findChildren(QLabel) if label.objectName() == "sectionTitle"]
+    diagnostics = DiagnosticsPanel()
+
+    assert headings == ["Na capa", "Fotografias disponíveis"]
+    assert diagnostics.order_value.objectName() == "metricTextValue"
 
 
 def test_close_requests_cancellation_without_waiting_for_worker(qapp):

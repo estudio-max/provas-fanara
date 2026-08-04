@@ -32,6 +32,7 @@ class DiagnosticsPanel(QFrame):
         self.photos_value = self._metric(layout, "Fotografias usadas")
         self.impact_value = self._metric(layout, "Páginas de impacto")
         self.order_value = self._metric(layout, "Ordem preservada")
+        self.order_value.setObjectName("metricTextValue")
 
         layout.addSpacing(16)
         warnings_title = QLabel("Observações")
@@ -49,7 +50,7 @@ class DiagnosticsPanel(QFrame):
         row.setObjectName("metricRow")
         row_layout = QVBoxLayout(row)
         row_layout.setContentsMargins(0, 8, 0, 8)
-        row_layout.setSpacing(2)
+        row_layout.setSpacing(4)
         name = QLabel(label)
         name.setObjectName("mutedText")
         value = QLabel("—")

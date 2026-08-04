@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -98,13 +99,16 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel(self.status_message)
         self.status_label.setObjectName("statusBanner")
         self.status_label.setProperty("kind", self.status_kind)
-        self.status_label.setMinimumWidth(220)
+        self.status_label.setMinimumWidth(120)
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         top.addWidget(self.status_label, 1)
 
         self.save_button = QPushButton("Salvar projeto")
+        self.save_button.setFixedWidth(116)
         self.save_button.setEnabled(False)
         self.export_button = QPushButton("Exportar PDF")
         self.export_button.setObjectName("primaryButton")
+        self.export_button.setFixedWidth(112)
         self.export_button.setEnabled(False)
         top.addWidget(self.save_button)
         top.addWidget(self.export_button)
@@ -172,6 +176,7 @@ class MainWindow(QMainWindow):
         self.last_export_path = ""
         self.project_label.setText(title)
         self.sidebar.set_folder(normalized)
+        self.sidebar.set_project_loaded(False)
         self.preview_grid.show_empty("Analise as fotografias para gerar a primeira diagramação.")
         self.diagnostics.summary_label.setText("Aguardando análise das fotografias.")
         self.set_status("Pasta escolhida. Analise as fotografias para continuar.", "idle")
@@ -281,6 +286,7 @@ class MainWindow(QMainWindow):
         config = replace(self._draft_config, modo=plan.mode, semente=plan.seed)
         paths = tuple(dict.fromkeys(photo_id for page in plan.pages for photo_id in page.photo_ids))
         self.project_state = ProjectState(config, plan, paths)
+        self.sidebar.set_project_loaded(True)
         self.previews = ()
         self._end_operation()
         self.diagnostics.set_plan(plan)

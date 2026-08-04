@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +30,10 @@ _ROLE_LABELS = {
     "pause": "Pausa",
     "ending": "Encerramento",
 }
+
+_BASE_CARD_WIDTH = 300
+_MIN_CARD_WIDTH = 190
+_GRID_GAP = 20
 
 
 def _to_qimage(source: object) -> QImage:
@@ -141,14 +146,17 @@ class PreviewGrid(QFrame):
         bar.setSpacing(8)
         title = QLabel("Prévia do fotolivro")
         title.setObjectName("panelTitle")
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         bar.addWidget(title)
         bar.addStretch(1)
 
         self.undo_button = QPushButton("Desfazer")
+        self.undo_button.setFixedWidth(76)
         self.undo_button.setEnabled(False)
         self.undo_button.setToolTip("Voltar à diagramação anterior")
         self.undo_button.clicked.connect(self.undo_requested)
         self.regenerate_button = QPushButton("Gerar outra diagramação")
+        self.regenerate_button.setFixedWidth(176)
         self.regenerate_button.setEnabled(False)
         self.regenerate_button.clicked.connect(self.regenerate_requested)
         self.zoom_out_button = QPushButton("−")
@@ -157,6 +165,7 @@ class PreviewGrid(QFrame):
         self.zoom_out_button.clicked.connect(lambda: self.set_zoom(self._zoom - 10))
         self.zoom_label = QLabel("100%")
         self.zoom_label.setObjectName("zoomLabel")
+        self.zoom_label.setFixedWidth(44)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.zoom_in_button = QPushButton("+")
         self.zoom_in_button.setObjectName("squareButton")
@@ -264,16 +273,23 @@ class PreviewGrid(QFrame):
             self._pixmap_cache.popitem(last=False)
         self._images = tuple(converted)
         self._reflow()
-        QTimer.singleShot(0, lambda: self._restore_scroll(scroll))
+        QTimer.singleShot(0, self, lambda: self._restore_scroll(scroll))
 
     def _restore_scroll(self, value: int) -> None:
         self.pending_scroll_position = value
         self.scroll_area.verticalScrollBar().setValue(value)
 
     def _columns(self) -> int:
-        available = max(320, self.scroll_area.viewport().width() - 48)
-        card_width = round(300 * self._zoom / 100)
-        return max(1, available // max(1, card_width + 20))
+        margins = self.grid.contentsMargins()
+        available = max(
+            1,
+            self.scroll_area.viewport().width() - margins.left() - margins.right(),
+        )
+        card_width = self._card_width()
+        return max(1, (available + _GRID_GAP) // (card_width + _GRID_GAP))
+
+    def _card_width(self) -> int:
+        return max(_MIN_CARD_WIDTH, round(_BASE_CARD_WIDTH * self._zoom / 100))
 
     def _reflow(self) -> None:
         if self._plan is None or not self._images:
@@ -281,7 +297,7 @@ class PreviewGrid(QFrame):
         self._clear_grid()
         columns = self._columns()
         self._laid_out_columns = columns
-        card_width = round(300 * self._zoom / 100)
+        card_width = self._card_width()
         for index, (page, image) in enumerate(zip(self._plan.pages, self._images)):
             role = _ROLE_LABELS.get(page.role, page.role.capitalize())
             card = LazyPageThumbnail(page, role, image, card_width)
@@ -299,7 +315,7 @@ class PreviewGrid(QFrame):
         self.zoom_in_button.setEnabled(value < 150)
         self.pending_scroll_position = scroll
         self._reflow()
-        QTimer.singleShot(0, lambda: self._restore_scroll(scroll))
+        QTimer.singleShot(0, self, lambda: self._restore_scroll(scroll))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -310,4 +326,4 @@ class PreviewGrid(QFrame):
         ):
             scroll = self.scroll_area.verticalScrollBar().value()
             self._reflow()
-            QTimer.singleShot(0, lambda: self._restore_scroll(scroll))
+            QTimer.singleShot(0, self, lambda: self._restore_scroll(scroll))

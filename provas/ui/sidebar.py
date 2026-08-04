@@ -111,7 +111,7 @@ class WorkflowSidebar(QFrame):
         progress_layout = QVBoxLayout(self.progress_panel)
         progress_layout.setContentsMargins(0, 0, 0, 0)
         progress_layout.setSpacing(8)
-        self.progress_label = QLabel("Preparando a mesa…")
+        self.progress_label = QLabel("")
         self.progress_label.setObjectName("mutedText")
         self.progress_label.setWordWrap(True)
         self.progress_bar = QProgressBar()
@@ -124,6 +124,7 @@ class WorkflowSidebar(QFrame):
         progress_layout.addWidget(self.progress_bar)
         progress_layout.addWidget(self.cancel_button)
         layout.addWidget(self.progress_panel)
+        self.progress_panel.hide()
 
     @property
     def mode(self) -> str:
@@ -132,6 +133,13 @@ class WorkflowSidebar(QFrame):
     def set_folder(self, path: str) -> None:
         self.folder_label.setText(os.path.basename(path.rstrip("\\/")) or path)
         self.folder_label.setToolTip(path)
+
+    def set_project_loaded(self, loaded: bool) -> None:
+        """Keep folder selection primary only until a project has been built."""
+        self.folder_button.setText("Trocar pasta" if loaded else "Escolher pasta")
+        self.folder_button.setObjectName("secondaryButton" if loaded else "importantButton")
+        self.folder_button.style().unpolish(self.folder_button)
+        self.folder_button.style().polish(self.folder_button)
 
     def set_mode(self, mode: str, *, emit: bool = False) -> None:
         if mode not in {"prova", "fotolivro"}:
@@ -150,14 +158,18 @@ class WorkflowSidebar(QFrame):
             self.mode_changed.emit(mode)
 
     def set_busy(self, busy: bool, label: str = "") -> None:
+        self.progress_panel.setVisible(busy)
         self.folder_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy and bool(self.folder_label.toolTip()))
         self.proof_radio.setEnabled(not busy)
         self.book_radio.setEnabled(not busy)
         self.cover_button.setEnabled(not busy and self.cover_button.property("ready") is True)
         self.cancel_button.setEnabled(busy)
-        if label:
+        if busy and label:
             self.progress_label.setText(label)
+        elif not busy:
+            self.progress_label.clear()
+            self.progress_bar.setValue(0)
 
     def set_cover_ready(self, ready: bool) -> None:
         self.cover_button.setProperty("ready", ready)
