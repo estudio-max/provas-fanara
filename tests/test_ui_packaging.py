@@ -40,3 +40,12 @@ def test_packaging_removes_user_configuration_and_logo_but_keeps_application_fil
     assert not (tmp_path / "logo.png").exists()
     assert (tmp_path / "Fotolivro.exe").exists()
     assert theme.exists()
+
+
+def test_windows_packager_recuses_other_platforms(monkeypatch, capsys):
+    import empacotar
+
+    monkeypatch.setattr(empacotar.sys, "platform", "darwin")
+
+    assert empacotar.main() == 1
+    assert "Windows" in capsys.readouterr().out

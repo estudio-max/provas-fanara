@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,6 +17,22 @@ from provas.projeto import ProjectState, load_project, save_project
 
 
 MODOS = ("prova", "fotolivro")
+
+
+class ParserEmPortugues(argparse.ArgumentParser):
+    """Keep the public command-line interface consistently in Portuguese."""
+
+    def format_help(self) -> str:
+        return (super().format_help()
+                .replace("usage:", "uso:")
+                .replace("positional arguments:", "argumentos posicionais:")
+                .replace("options:", "opções:"))
+
+    def error(self, message: str) -> None:
+        mensagem = (message.replace("unrecognized arguments:", "argumentos não reconhecidos:")
+                    .replace("invalid choice:", "escolha inválida:"))
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: erro: {mensagem}\n")
 
 
 def modo_editorial(value: str) -> str:
@@ -27,10 +44,16 @@ def modo_editorial(value: str) -> str:
     return value
 
 
+def caminho_pdf(value: str) -> str:
+    if value and Path(value).suffix.lower() != ".pdf":
+        raise argparse.ArgumentTypeError("a saída deve terminar em .pdf")
+    return value
+
+
 def criar_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Gera um PDF editorial de uma sessão fotográfica.")
+    parser = ParserEmPortugues(description="Gera um PDF editorial de uma sessão fotográfica.")
     parser.add_argument("pasta", nargs="?", help="pasta com as fotos da sessão")
-    parser.add_argument("-o", "--saida", default="", help="caminho do PDF (padrão: dentro da pasta)")
+    parser.add_argument("-o", "--saida", type=caminho_pdf, default="", help="caminho do PDF (padrão: dentro da pasta)")
     parser.add_argument("-t", "--titulo", default="", help="título da capa")
     parser.add_argument("-d", "--data", default="", help="data mostrada na capa")
     parser.add_argument("-n", "--por-pagina", type=int, default=4, help="fotos por página")
@@ -42,8 +65,6 @@ def criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--opacidade", type=float, default=0.20, help="força da marca d'água")
     parser.add_argument("--capa", choices=list(capas.ESTILOS), default="mosaico")
     parser.add_argument("--sem-capa", action="store_true")
-    parser.add_argument("--sem-marca", action="store_true", help="não aplicar marca d'água no modo prova")
-    parser.add_argument("--sem-codigos", action="store_true", help="não escrever códigos no modo prova")
     parser.add_argument("--modo", type=modo_editorial, metavar="{prova,fotolivro}", default="prova",
                         help="prova com marca e códigos, ou fotolivro limpo")
     parser.add_argument("--album", dest="modo", action="store_const", const="fotolivro",
@@ -76,8 +97,8 @@ def config_dos_argumentos(args: argparse.Namespace) -> motor.Config:
         cor_fundo=args.fundo,
         capa_mosaico=not args.sem_capa,
         estilo_capa=args.capa,
-        marca_dagua=not (limpo or args.sem_marca),
-        mostrar_codigos=not (limpo or args.sem_codigos),
+        marca_dagua=not limpo,
+        mostrar_codigos=not limpo,
         girar_horizontais=False,
         recursivo=args.subpastas,
         limite=12 if args.amostra else 0,
@@ -113,10 +134,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.abrir_projeto:
+            if not args.saida:
+                parser.error("ao abrir um projeto, informe --saida com um novo arquivo .pdf")
             state = load_project(args.abrir_projeto)
             config = state.config.to_motor_config()
-            if args.saida:
-                config.saida = args.saida
+            config.saida = args.saida
             resultado = motor.exportar(config, state.plan, progresso=progresso)
             print(f"\nProjeto aberto: {args.abrir_projeto}")
             modo = state.plan.mode

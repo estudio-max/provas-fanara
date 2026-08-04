@@ -1,19 +1,9 @@
-"""Gera o aplicativo do Provas para distribuir.
+"""Gera o pacote Windows do Fotolivro editorial.
 
     python empacotar.py
 
-No Windows produz `dist/Fotolivro/` (pasta) e `dist/Fotolivro-Windows.zip`.
-No macOS produz `dist/Fotolivro.app` e `dist/Fotolivro-macOS.zip`.
-
-O PyInstaller NÃO faz compilação cruzada: para ter a versão de Mac é preciso
-rodar este script num Mac, e o pacote sai para a arquitetura daquela máquina
-(Apple Silicon ou Intel).
-
-O modo pasta (em vez de arquivo único) no Windows foi escolhido de propósito:
-abre bem mais rápido, porque não descompacta ~80 MB a cada execução, e dispara
-muito menos alarme falso de antivírus.
-
-O logotipo NÃO vai embutido: quem receber aponta o próprio na janela.
+Produz `dist/Fotolivro/` e `dist/Fotolivro-Windows.zip`. Este empacotador é
+deliberadamente Windows-only: o PyInstaller não faz compilação cruzada.
 """
 from __future__ import annotations
 
@@ -24,32 +14,27 @@ import sys
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 NOME = "Fotolivro"
-IDENTIFICADOR = "com.provas.selecao"
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
-MAC = sys.platform == "darwin"
 
-LEIAME_COMUM = """FOTOLIVRO — cria um PDF editorial a partir da pasta do ensaio
+LEIAME_WINDOWS = """FOTOLIVRO — PDF editorial a partir da pasta do ensaio
 
 PRIMEIRO USO
-Preencha "Nome do estúdio", "Site" e escolha o seu logotipo (um PNG com fundo
-transparente) no campo Logotipo. Isso fica salvo para as próximas vezes.
-Depois: escolha a pasta do ensaio, confira a prévia e então clique em
-"Exportar PDF".
+1. Extraia a pasta inteira e abra "Fotolivro.exe". Não separe a pasta
+   "_internal", pois ela contém as bibliotecas do aplicativo.
+2. Clique em "Escolher pasta" e depois em "Analisar fotografias".
+3. Escolha "Prova para seleção" (marca d'água e códigos) ou "Fotolivro limpo"
+   (sem os dois), revise a prévia e, se desejar, use "Trocar fotos da capa".
+4. Clique em "Exportar PDF". "Salvar projeto" grava apenas o plano e os
+   caminhos das fotos; as fotografias continuam na pasta original.
 
 O QUE ELE LÊ
-JPG, e também RAW (.NEF, .CR2, .ARW, .DNG, .ORF, .RW2 e outros). Em pastas só
-com RAW ele usa a pré-visualização em tamanho cheio que a câmera grava dentro do
-arquivo, por isso é rápido. Havendo RAW e JPG de mesmo nome, é a mesma foto.
+JPG/JPEG e RAW usuais (.NEF, .CR2, .ARW, .DNG, .ORF e .RW2). Para RAW, usa a
+prévia JPEG integrada pela câmera; não revela RAW nem aplica ajustes de cor ou
+lente. RAW e JPG de mesmo nome representam uma única foto.
 
-DOIS MODOS
-- Prova: com marca d'água e com o código do arquivo sob cada foto.
-- Fotolivro: limpo, sem marca d'água nem códigos. Sem a legenda, a foto sai maior.
-"""
-
-LEIAME_WINDOWS = LEIAME_COMUM + """
-COMO ABRIR
-Extraia esta pasta inteira e abra "Fotolivro.exe". Não separe os arquivos: o
-programa depende da pasta "_internal" que está ao lado.
+PRIVACIDADE
+O pacote não contém suas preferências locais nem logotipo. Projetos .provas.json
+não guardam cópias das fotografias.
 
 AVISO DO WINDOWS
 Por ser um programa sem assinatura digital paga, pode aparecer "O Windows
@@ -57,34 +42,17 @@ protegeu o computador". Clique em "Mais informações" e depois em "Executar
 assim mesmo".
 """
 
-LEIAME_MAC = LEIAME_COMUM + """
-COMO ABRIR
-Arraste "Provas.app" para a pasta Aplicativos (ou deixe onde preferir).
-
-AVISO DO macOS — IMPORTANTE
-Na primeira vez o macOS vai recusar, dizendo que o desenvolvedor não pode ser
-verificado. Isso acontece com qualquer programa sem assinatura paga da Apple.
-Para liberar: clique com o botão direito (ou Control+clique) no Provas.app e
-escolha "Abrir", e então confirme "Abrir" na caixa que aparecer. Só é preciso
-fazer isso uma vez.
-
-Se mesmo assim disser que o app "está danificado", abra o Terminal e rode:
-    xattr -dr com.apple.quarantine "/caminho/para/Provas.app"
-
-Requer macOS Monterey (12) ou mais novo.
-"""
-
 
 def dados_pyinstaller() -> list[str]:
-    """Bundle the visual resources and Qt plugins used by the PySide6 desk."""
+    """Bundle the application stylesheet and the required Windows Qt plugin."""
     from PySide6 import __file__ as pyside_package
 
-    source = os.path.join(RAIZ, "provas", "ui", "theme.qss")
+    theme = os.path.join(RAIZ, "provas", "ui", "theme.qss")
     platform_plugin = os.path.join(
         os.path.dirname(pyside_package), "plugins", "platforms", "qwindows.dll",
     )
     return [
-        "--add-data", f"{source}{os.pathsep}provas/ui",
+        "--add-data", f"{theme}{os.pathsep}provas/ui",
         "--add-binary", f"{platform_plugin}{os.pathsep}PySide6/plugins/platforms",
     ]
 
@@ -98,78 +66,57 @@ def remover_dados_usuario(pasta: str) -> None:
 
 
 def gerar_icone() -> str | None:
-    """Ícone neutro: um losango claro sobre fundo grafite, sem marca de estúdio.
-
-    No macOS o PyInstaller converte o PNG para .icns; no Windows usa o .ico.
-    """
+    """Create the neutral Windows icon embedded in the executable."""
     try:
         from PIL import Image, ImageDraw
     except ImportError:
         return None
-    pasta = os.path.join(RAIZ, "assets")
-    os.makedirs(pasta, exist_ok=True)
-
+    caminho = os.path.join(RAIZ, "assets", "icone.ico")
+    os.makedirs(os.path.dirname(caminho), exist_ok=True)
     lado, escala = 512, 2
     tela = Image.new("RGBA", (lado * escala, lado * escala), (22, 22, 26, 255))
     desenho = ImageDraw.Draw(tela)
-    meio = lado * escala / 2
-    raio = lado * escala * 0.33
+    meio, raio = lado * escala / 2, lado * escala * 0.33
     desenho.polygon([(meio, meio - raio), (meio + raio, meio),
                      (meio, meio + raio), (meio - raio, meio)], fill=(236, 237, 240, 255))
     interno = raio * 0.45
     desenho.polygon([(meio, meio - interno), (meio + interno, meio),
                      (meio, meio + interno), (meio - interno, meio)], fill=(216, 64, 96, 255))
-    tela = tela.resize((lado, lado), Image.Resampling.LANCZOS)
-
-    if MAC:
-        caminho = os.path.join(pasta, "icone.png")
-        tela.save(caminho)
-        return caminho
-    caminho = os.path.join(pasta, "icone.ico")
-    tela.resize((256, 256), Image.Resampling.LANCZOS).save(
-        caminho, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    tela.resize((lado, lado), Image.Resampling.LANCZOS).save(
+        caminho, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    )
     return caminho
 
 
 def compactar(alvo: str, destino_zip: str) -> str:
-    """Compacta preservando permissões — no macOS isso importa para o .app."""
-    if MAC and shutil.which("ditto"):
-        subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
-                        alvo, destino_zip], check=True)
-        return destino_zip
-    return shutil.make_archive(os.path.splitext(destino_zip)[0], "zip",
-                               os.path.dirname(alvo), os.path.basename(alvo))
+    return shutil.make_archive(os.path.splitext(destino_zip)[0], "zip", os.path.dirname(alvo), os.path.basename(alvo))
 
 
 def main() -> int:
+    if sys.platform != "win32":
+        print("Este empacotador gera somente o pacote Windows; execute-o no Windows.")
+        return 1
     try:
         import PyInstaller  # noqa: F401
     except ImportError:
-        print("PyInstaller não está instalado. Rode:  python -m pip install pyinstaller")
+        print("PyInstaller não está instalado. Rode: python -m pip install pyinstaller")
         return 1
 
     with open(ENTRADA, "w", encoding="utf-8") as arquivo:
         arquivo.write("from provas.app import principal\n\nprincipal()\n")
 
-    icone = gerar_icone()
     comando = [
-        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-        "--windowed", "--name", NOME,
-        "--distpath", os.path.join(RAIZ, "dist"),
-        "--workpath", os.path.join(RAIZ, "build"),
-        "--specpath", os.path.join(RAIZ, "build"),
-        "--paths", RAIZ,
-        # o app usa só tkinter, Pillow e PyMuPDF; o resto é peso morto no pacote
-        "--exclude-module", "numpy", "--exclude-module", "matplotlib",
-        "--exclude-module", "scipy", "--exclude-module", "pandas",
-        "--exclude-module", "PIL.ImageQt", "--exclude-module", "PyQt5",
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", NOME,
+        "--distpath", os.path.join(RAIZ, "dist"), "--workpath", os.path.join(RAIZ, "build"),
+        "--specpath", os.path.join(RAIZ, "build"), "--paths", RAIZ,
+        "--exclude-module", "numpy", "--exclude-module", "matplotlib", "--exclude-module", "scipy",
+        "--exclude-module", "pandas", "--exclude-module", "PIL.ImageQt", "--exclude-module", "PyQt5",
         "--exclude-module", "PySide2", "--exclude-module", "test",
+        *dados_pyinstaller(),
     ]
-    comando += dados_pyinstaller()
+    icone = gerar_icone()
     if icone:
-        comando += ["--icon", icone]
-    if MAC:
-        comando += ["--osx-bundle-identifier", IDENTIFICADOR]
+        comando.extend(("--icon", icone))
     comando.append(ENTRADA)
 
     print("Empacotando…")
@@ -181,27 +128,14 @@ def main() -> int:
     if resultado.returncode != 0:
         return resultado.returncode
 
-    if MAC:
-        alvo = os.path.join(RAIZ, "dist", f"{NOME}.app")
-        leiame = os.path.join(RAIZ, "dist", "LEIA-ME.txt")
-        texto = LEIAME_MAC
-        zipe = os.path.join(RAIZ, "dist", f"{NOME}-macOS.zip")
-    else:
-        alvo = os.path.join(RAIZ, "dist", NOME)
-        leiame = os.path.join(alvo, "LEIA-ME.txt")
-        texto = LEIAME_WINDOWS
-        zipe = os.path.join(RAIZ, "dist", f"{NOME}-Windows.zip")
-
+    alvo = os.path.join(RAIZ, "dist", NOME)
     remover_dados_usuario(alvo)
+    leiame = os.path.join(alvo, "LEIA-ME.txt")
     with open(leiame, "w", encoding="utf-8") as arquivo:
-        arquivo.write(texto)
-
-    pacote = compactar(alvo, zipe)
+        arquivo.write(LEIAME_WINDOWS)
+    pacote = compactar(alvo, os.path.join(RAIZ, "dist", f"{NOME}-Windows.zip"))
     print(f"\nAplicativo: {alvo}")
     print(f"Enviar:     {pacote}  ({os.path.getsize(pacote) / 1e6:.0f} MB)")
-    if MAC:
-        print("Lembre o destinatário de abrir a primeira vez com botão direito → Abrir.")
-        print(f"Mande junto o {leiame}.")
     return 0
 
 
