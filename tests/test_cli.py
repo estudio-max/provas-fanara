@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pymupdf
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
@@ -116,6 +117,37 @@ def test_cli_rejeita_flags_que_quebrariam_os_modos_e_mantem_help_em_portugues(tm
     assert "--sem-marca" not in help_result.stdout
 
 
+@pytest.mark.parametrize(
+    ("args", "mensagem"),
+    [
+        ((), "informe a pasta"),
+        (("--modo",), "exige um valor"),
+        (("--por-pagina", "quatro"), "número inteiro inválido"),
+        (("--qualidade", "ultra"), "qualidade inválida"),
+        (("--desconhecida",), "argumentos não reconhecidos"),
+    ],
+)
+def test_cli_erros_comuns_do_argparse_sao_integralmente_em_portugues(args, mensagem):
+    result = executar(*args)
+
+    assert result.returncode == 2
+    assert mensagem in result.stderr.lower()
+    assert "usage:" not in result.stderr.lower()
+    assert "error:" not in result.stderr.lower()
+    assert "invalid" not in result.stderr.lower()
+    assert "argument " not in result.stderr.lower()
+
+
+def test_cli_ajuda_curta_e_uso_nao_expoem_texto_ingles():
+    result = executar("-h")
+
+    assert result.returncode == 0
+    assert "uso:" in result.stdout.lower()
+    assert "mostra esta ajuda e encerra" in result.stdout.lower()
+    assert "usage:" not in result.stdout.lower()
+    assert "show this help message" not in result.stdout.lower()
+
+
 def test_verificador_lista_dependencias_editoriais_e_permissao_de_escrita():
     result = subprocess.run(
         [sys.executable, str(ROOT / "verificar.py")],
@@ -150,4 +182,5 @@ def test_verificador_rejeita_versoes_abaixo_do_minimo():
 
     assert verificar.versao_compativel("9.9", "10.0") is False
     assert verificar.versao_compativel("1.23.9", "1.24") is False
+    assert verificar.versao_compativel("10.0rc1", "10.0") is False
     assert verificar.versao_compativel("6.7.0", "6.7") is True

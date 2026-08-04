@@ -1,7 +1,7 @@
 """Interface de linha de comando do Fotolivro editorial.
 
     python provas_cli.py "C:\\ensaios\\Bianca" --modo fotolivro --semente 42
-    python provas_cli.py --abrir-projeto "C:\\ensaios\\Bianca.provas.json"
+    python provas_cli.py --abrir-projeto "C:\\ensaios\\Bianca.provas.json" --saida "C:\\entregas\\Bianca.pdf"
 """
 from __future__ import annotations
 
@@ -22,6 +22,9 @@ MODOS = ("prova", "fotolivro")
 class ParserEmPortugues(argparse.ArgumentParser):
     """Keep the public command-line interface consistently in Portuguese."""
 
+    def format_usage(self) -> str:
+        return super().format_usage().replace("usage:", "uso:")
+
     def format_help(self) -> str:
         return (super().format_help()
                 .replace("usage:", "uso:")
@@ -29,10 +32,39 @@ class ParserEmPortugues(argparse.ArgumentParser):
                 .replace("options:", "opções:"))
 
     def error(self, message: str) -> None:
-        mensagem = (message.replace("unrecognized arguments:", "argumentos não reconhecidos:")
-                    .replace("invalid choice:", "escolha inválida:"))
         self.print_usage(sys.stderr)
-        self.exit(2, f"{self.prog}: erro: {mensagem}\n")
+        self.exit(2, f"{self.prog}: erro: {message}\n")
+
+    def _validar_valores_ausentes(self, valores: list[str]) -> None:
+        for indice, valor in enumerate(valores):
+            opcao = valor.split("=", 1)[0]
+            acao = self._option_string_actions.get(opcao)
+            if acao is None or "=" in valor or acao.nargs == 0:
+                continue
+            if indice == len(valores) - 1 or valores[indice + 1].startswith("--"):
+                self.error(f"a opção {opcao} exige um valor")
+
+    def _get_value(self, action, arg_string):
+        """Convert typed options without argparse adding an English prefix."""
+        type_func = self._registry_get("type", action.type, action.type)
+        if not callable(type_func):
+            raise TypeError(f"{type_func!r} não pode converter valores")
+        try:
+            return type_func(arg_string)
+        except argparse.ArgumentTypeError as erro:
+            opcao = action.option_strings[-1] if action.option_strings else action.dest
+            raise argparse.ArgumentError(None, f"opção {opcao}: {erro}") from erro
+        except (TypeError, ValueError) as erro:
+            opcao = action.option_strings[-1] if action.option_strings else action.dest
+            raise argparse.ArgumentError(None, f"opção {opcao}: valor inválido: {arg_string!r}") from erro
+
+    def parse_args(self, args=None, namespace=None):
+        valores = list(sys.argv[1:] if args is None else args)
+        self._validar_valores_ausentes(valores)
+        argumentos, desconhecidos = self.parse_known_args(valores, namespace)
+        if desconhecidos:
+            self.error(f"argumentos não reconhecidos: {' '.join(desconhecidos)}")
+        return argumentos
 
 
 def modo_editorial(value: str) -> str:
@@ -50,14 +82,31 @@ def caminho_pdf(value: str) -> str:
     return value
 
 
+def numero_inteiro(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as erro:
+        raise argparse.ArgumentTypeError(f"número inteiro inválido: {value!r}") from erro
+
+
+def qualidade_editorial(value: str) -> str:
+    if value not in motor.QUALIDADES:
+        opcoes = ", ".join(motor.QUALIDADES)
+        raise argparse.ArgumentTypeError(f"qualidade inválida: {value!r}. Use {opcoes}.")
+    return value
+
+
 def criar_parser() -> argparse.ArgumentParser:
-    parser = ParserEmPortugues(description="Gera um PDF editorial de uma sessão fotográfica.")
+    parser = ParserEmPortugues(
+        description="Gera um PDF editorial de uma sessão fotográfica.", add_help=False,
+    )
+    parser.add_argument("-h", "--help", "--ajuda", action="help", help="mostra esta ajuda e encerra")
     parser.add_argument("pasta", nargs="?", help="pasta com as fotos da sessão")
     parser.add_argument("-o", "--saida", type=caminho_pdf, default="", help="caminho do PDF (padrão: dentro da pasta)")
     parser.add_argument("-t", "--titulo", default="", help="título da capa")
     parser.add_argument("-d", "--data", default="", help="data mostrada na capa")
-    parser.add_argument("-n", "--por-pagina", type=int, default=4, help="fotos por página")
-    parser.add_argument("-q", "--qualidade", choices=list(motor.QUALIDADES), default="normal")
+    parser.add_argument("-n", "--por-pagina", type=numero_inteiro, default=4, help="fotos por página")
+    parser.add_argument("-q", "--qualidade", type=qualidade_editorial, metavar="{leve,normal,alta}", default="normal")
     parser.add_argument("--logo", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png"))
     parser.add_argument("--estudio", default="", help="nome exibido quando não há logotipo")
     parser.add_argument("--site", default="", help="endereço mostrado no rodapé")

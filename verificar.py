@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import sys
 import tempfile
+
+from packaging.version import InvalidVersion, Version
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -20,16 +21,12 @@ def linha(estado: str, texto: str) -> None:
     print(f"[{estado}] {texto}")
 
 
-def _partes_versao(valor: str) -> tuple[int, ...]:
-    partes = re.findall(r"\d+", valor)
-    return tuple(int(parte) for parte in partes) or (0,)
-
-
 def versao_compativel(instalada: str, minima: str) -> bool:
-    """Compare numeric package versions without rejecting local suffixes."""
-    atual, exigida = _partes_versao(instalada), _partes_versao(minima)
-    tamanho = max(len(atual), len(exigida))
-    return atual + (0,) * (tamanho - len(atual)) >= exigida + (0,) * (tamanho - len(exigida))
+    """Compare package versions according to PEP 440, including prereleases."""
+    try:
+        return Version(instalada) >= Version(minima)
+    except InvalidVersion:
+        return False
 
 
 def diagnosticar_dependencias() -> int:
