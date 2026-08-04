@@ -2,8 +2,8 @@
 
     python empacotar.py
 
-No Windows produz `dist/Provas/` (pasta) e `dist/Provas-Windows.zip`.
-No macOS produz `dist/Provas.app` e `dist/Provas-macOS.zip`.
+No Windows produz `dist/Fotolivro/` (pasta) e `dist/Fotolivro-Windows.zip`.
+No macOS produz `dist/Fotolivro.app` e `dist/Fotolivro-macOS.zip`.
 
 O PyInstaller NÃO faz compilação cruzada: para ter a versão de Mac é preciso
 rodar este script num Mac, e o pacote sai para a arquitetura daquela máquina
@@ -23,18 +23,18 @@ import subprocess
 import sys
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
-NOME = "Provas"
+NOME = "Fotolivro"
 IDENTIFICADOR = "com.provas.selecao"
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
 MAC = sys.platform == "darwin"
 
-LEIAME_COMUM = """PROVAS — monta o PDF de seleção de fotos a partir da pasta do ensaio
+LEIAME_COMUM = """FOTOLIVRO — cria um PDF editorial a partir da pasta do ensaio
 
 PRIMEIRO USO
 Preencha "Nome do estúdio", "Site" e escolha o seu logotipo (um PNG com fundo
 transparente) no campo Logotipo. Isso fica salvo para as próximas vezes.
-Depois: escolha a pasta do ensaio, clique em "Amostra (12 fotos)" para conferir
-e então em "Gerar PDF".
+Depois: escolha a pasta do ensaio, confira a prévia e então clique em
+"Exportar PDF".
 
 O QUE ELE LÊ
 JPG, e também RAW (.NEF, .CR2, .ARW, .DNG, .ORF, .RW2 e outros). Em pastas só
@@ -43,13 +43,12 @@ arquivo, por isso é rápido. Havendo RAW e JPG de mesmo nome, é a mesma foto.
 
 DOIS MODOS
 - Prova: com marca d'água e com o código do arquivo sob cada foto.
-- Álbum: desligue "Aplicar" (marca d'água) e "Códigos sob as fotos". Sem a
-  legenda, a foto sai maior.
+- Fotolivro: limpo, sem marca d'água nem códigos. Sem a legenda, a foto sai maior.
 """
 
 LEIAME_WINDOWS = LEIAME_COMUM + """
 COMO ABRIR
-Extraia esta pasta inteira e abra "Provas.exe". Não separe os arquivos: o
+Extraia esta pasta inteira e abra "Fotolivro.exe". Não separe os arquivos: o
 programa depende da pasta "_internal" que está ao lado.
 
 AVISO DO WINDOWS
@@ -77,9 +76,25 @@ Requer macOS Monterey (12) ou mais novo.
 
 
 def dados_pyinstaller() -> list[str]:
-    """Bundle the stylesheet at the same package-relative path used at runtime."""
+    """Bundle the visual resources and Qt plugins used by the PySide6 desk."""
+    from PySide6 import __file__ as pyside_package
+
     source = os.path.join(RAIZ, "provas", "ui", "theme.qss")
-    return ["--add-data", f"{source}{os.pathsep}provas/ui"]
+    platform_plugin = os.path.join(
+        os.path.dirname(pyside_package), "plugins", "platforms", "qwindows.dll",
+    )
+    return [
+        "--add-data", f"{source}{os.pathsep}provas/ui",
+        "--add-binary", f"{platform_plugin}{os.pathsep}PySide6/plugins/platforms",
+    ]
+
+
+def remover_dados_usuario(pasta: str) -> None:
+    """Never ship the local preferences or a photographer's watermark asset."""
+    for nome in ("config.json", "logo.png"):
+        caminho = os.path.join(pasta, nome)
+        if os.path.isfile(caminho):
+            os.unlink(caminho)
 
 
 def gerar_icone() -> str | None:
@@ -158,8 +173,11 @@ def main() -> int:
     comando.append(ENTRADA)
 
     print("Empacotando…")
-    resultado = subprocess.run(comando, cwd=RAIZ)
-    os.remove(ENTRADA)
+    try:
+        resultado = subprocess.run(comando, cwd=RAIZ)
+    finally:
+        if os.path.exists(ENTRADA):
+            os.remove(ENTRADA)
     if resultado.returncode != 0:
         return resultado.returncode
 
@@ -174,6 +192,7 @@ def main() -> int:
         texto = LEIAME_WINDOWS
         zipe = os.path.join(RAIZ, "dist", f"{NOME}-Windows.zip")
 
+    remover_dados_usuario(alvo)
     with open(leiame, "w", encoding="utf-8") as arquivo:
         arquivo.write(texto)
 

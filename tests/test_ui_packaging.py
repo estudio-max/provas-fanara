@@ -18,3 +18,25 @@ def test_theme_qss_is_declared_for_wheels_and_pyinstaller():
     source, destination = arguments[1].split(os.pathsep, maxsplit=1)
     assert Path(source).resolve() == (root / "provas" / "ui" / "theme.qss").resolve()
     assert destination.replace("\\", "/") == "provas/ui"
+    assert arguments[2] == "--add-binary"
+    plugin_source, plugin_destination = arguments[3].split(os.pathsep, maxsplit=1)
+    assert Path(plugin_source).name == "qwindows.dll"
+    assert plugin_destination.replace("\\", "/") == "PySide6/plugins/platforms"
+
+
+def test_packaging_removes_user_configuration_and_logo_but_keeps_application_files(tmp_path: Path):
+    from empacotar import remover_dados_usuario
+
+    (tmp_path / "config.json").write_text("dados pessoais", encoding="utf-8")
+    (tmp_path / "logo.png").write_bytes(b"marca do usuario")
+    (tmp_path / "Fotolivro.exe").write_bytes(b"executavel")
+    (tmp_path / "provas" / "ui").mkdir(parents=True)
+    theme = tmp_path / "provas" / "ui" / "theme.qss"
+    theme.write_text("QWidget {}", encoding="utf-8")
+
+    remover_dados_usuario(str(tmp_path))
+
+    assert not (tmp_path / "config.json").exists()
+    assert not (tmp_path / "logo.png").exists()
+    assert (tmp_path / "Fotolivro.exe").exists()
+    assert theme.exists()

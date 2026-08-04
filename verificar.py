@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import platform
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -22,31 +23,29 @@ def linha(estado: str, texto: str) -> None:
 
 
 def main() -> int:
-    print(f"\nProvas — verificação\n{'-' * 52}")
+    print(f"\nFotolivro — verificação\n{'-' * 52}")
     print(f"Sistema : {platform.system()} {platform.release()} ({platform.machine()})")
     print(f"Python  : {sys.version.split()[0]}\n")
 
     problemas = 0
 
-    try:
-        import tkinter
-        linha(OK, f"tkinter presente (Tk {tkinter.TkVersion})")
-        if tkinter.TkVersion < 8.6:
-            linha(AVISO, "Tk anterior a 8.6 — a janela pode ficar feia. "
-                         "Prefira o Python do python.org.")
-    except ImportError:
-        problemas += 1
-        linha(FALHA, "tkinter ausente. No macOS, instale o Python do python.org; "
-                     "no Linux, o pacote python3-tk.")
-
-    for modulo, apelido in (("PIL", "Pillow"), ("pymupdf", "PyMuPDF")):
+    for modulo, apelido in (("PIL", "Pillow"), ("pymupdf", "PyMuPDF"), ("PySide6", "PySide6")):
         try:
             importado = __import__(modulo)
             versao = getattr(importado, "__version__", "?")
             linha(OK, f"{apelido} {versao}")
         except ImportError:
             problemas += 1
-            linha(FALHA, f"{apelido} ausente. Rode:  python3 -m pip install Pillow PyMuPDF")
+            linha(FALHA, f"{apelido} ausente. Rode:  python -m pip install Pillow PyMuPDF PySide6")
+
+    try:
+        descriptor, caminho = tempfile.mkstemp(prefix=".fotolivro-verificar-", dir=os.getcwd())
+        os.close(descriptor)
+        os.unlink(caminho)
+        linha(OK, f"permissão de escrita em {os.getcwd()}")
+    except OSError as erro:
+        problemas += 1
+        linha(FALHA, f"sem permissão de escrita em {os.getcwd()}: {erro}")
 
     if problemas:
         print("\nResolva os itens acima antes de seguir.\n")
