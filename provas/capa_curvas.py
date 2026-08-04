@@ -14,6 +14,8 @@ from PIL import Image, ImageDraw
 
 
 _SUPERSAMPLING = 3
+MIN_ORBIT_WIDTH = 16
+MIN_ORBIT_HEIGHT = 11
 _IDENTITY_SAFE = (0.38, 0.34, 0.24, 0.30)
 _LOGO_SAFE = (0.04, 0.05, 0.18, 0.09)
 _SITE_SAFE = (0.78, 0.90, 0.18, 0.05)
@@ -223,6 +225,8 @@ def layout_orbita(width: int, height: int, count: int) -> CurveLayout:
         raise ValueError(
             "A órbita exige dimensões positivas em A4 horizontal e de 1 a 9 fotografias."
         )
+    if width < MIN_ORBIT_WIDTH or height < MIN_ORBIT_HEIGHT:
+        raise ValueError("A órbita exige no mínimo 16×11 pixels para manter todas as fotos visíveis.")
 
     slots = tuple(
         CurveSlot(
@@ -253,4 +257,8 @@ def render_mask(slot: CurveSlot, size: tuple[int, int]) -> Image.Image:
         (round(x * width * scale), round(y * height * scale)) for x, y in slot.path
     )
     ImageDraw.Draw(mask).polygon(points, fill=255)
-    return mask.resize((width, height), Image.Resampling.LANCZOS)
+    reduced = mask.resize((width, height), Image.Resampling.LANCZOS)
+    clipped = Image.new("L", (width, height), 0)
+    crop_box = (slot.bounds.x, slot.bounds.y, slot.bounds.right, slot.bounds.bottom)
+    clipped.paste(reduced.crop(crop_box), crop_box[:2])
+    return clipped

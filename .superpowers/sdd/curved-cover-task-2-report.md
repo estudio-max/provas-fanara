@@ -87,3 +87,83 @@ exit 0
 - Nenhum bloqueio técnico conhecido nesta tarefa.
 - A geometria deliberadamente não resolve enquadramento nem ordem de colagem;
   esses comportamentos pertencem às tarefas posteriores do plano.
+
+## Correções após revisão
+
+Commit-base revisado: `563f1b1`.
+
+### RED/GREEN 1 — slots invisíveis em canvas mínimo
+
+A investigação reproduziu bounds com largura ou altura zero em 2×1 e 3×2,
+causados pelo arredondamento das frações normalizadas. O RED foi criado antes
+da validação de produção:
+
+```text
+python -m pytest tests/test_capa_curvas.py -q
+4 failed, 25 passed
+```
+
+Falharam exatamente os casos 2×1, 3×2, 15×11 e 16×10, que ainda retornavam
+layout. Foram definidos `MIN_ORBIT_WIDTH = 16` e `MIN_ORBIT_HEIGHT = 11`;
+dimensões menores agora são rejeitadas com mensagem PT-BR. O boundary 16×11
+foi testado nas nove variantes: os 45 bounds têm área positiva e todas as
+máscaras possuem pixels visíveis.
+
+```text
+python -m pytest tests/test_capa_curvas.py -q
+29 passed
+```
+
+### RED/GREEN 2 — halo LANCZOS fora dos bounds
+
+A redução LANCZOS espalhava pixels não zero até três pixels além do retângulo
+declarado. O teste novo percorreu os 45 slots em 1600×1131 e 800×566:
+
+```text
+python -m pytest tests/test_capa_curvas.py::test_every_mask_antialias_halo_is_clipped_to_its_pixel_bounds -q
+2 failed
+```
+
+O renderer passou a recortar o resultado reduzido estritamente ao
+`slot.bounds`, preservando antialias interno e zerando o halo externo.
+
+```text
+python -m pytest tests/test_capa_curvas.py -q
+31 passed
+```
+
+### RED/GREEN 3 — snapshots sensíveis à silhueta
+
+A métrica de snapshot foi alterada de contagem de pixels totalmente opacos,
+arredondada a uma casa, para soma de todas as intensidades dividida por
+`255 * bounds.area`, arredondada a quatro casas. Antes de atualizar os valores
+aprovados, os dois testes de snapshot falharam como esperado:
+
+```text
+python -m pytest tests/test_capa_curvas.py::test_representative_a4_geometry_snapshot tests/test_capa_curvas.py::test_nine_photo_and_smaller_proportional_geometry_snapshots -q
+2 failed
+```
+
+Os snapshots agora preservam diferenças reais de shape, orientação,
+arredondamento e tamanho (por exemplo, `0.7834`, `0.7840`, `0.7803`). Um guard
+de sensibilidade substitui a folha por um retângulo mutante e exige diferença
+de cobertura superior a 0,15; uma alteração substancial da silhueta aprovada
+faz esse teste ou os snapshots precisos falharem.
+
+### Verificação final da correção
+
+```text
+python -m pytest tests/test_capa_curvas.py -q
+32 passed
+
+python -m pytest tests/test_capas_editoriais.py -q
+2 passed
+
+git diff --check
+exit 0
+```
+
+Autorrevisão da correção: o mínimo é validado antes da escala; nenhum slot
+dummy foi introduzido; o clipping ocorre depois de 3×/LANCZOS; a métrica usa
+todo o sinal antialias; e as mudanças continuam limitadas ao módulo
+geométrico, seus testes e este relatório. Não restam preocupações conhecidas.
