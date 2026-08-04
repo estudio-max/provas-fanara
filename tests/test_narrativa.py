@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from provas.modelos import PhotoInfo
+
+
+def _photos(total: int) -> list[PhotoInfo]:
+    return [
+        PhotoInfo(
+            id=f"p{index}", path=f"p{index}.jpg", label=f"P {index}", width=120, height=180,
+            index=index, sharpness=(index % 5) / 4, exposure=0.5, density=(index % 4) / 3,
+            quality=(total - index) / total, similarity_group=index // 2,
+        )
+        for index in range(total)
+    ]
+
+
+@pytest.mark.parametrize("total", [2, 3, 5, 9, 17, 31])
+def test_agrupar_fotos_covers_every_photo_once_in_allowed_group_sizes(total):
+    from provas.narrativa import agrupar_fotos
+
+    items = _photos(total)
+    groups = agrupar_fotos(items, seed=42)
+    ordered_ids = [photo_id for group in groups for photo_id in group.photo_ids]
+
+    assert sorted(ordered_ids) == sorted(photo.id for photo in items)
+    assert len(ordered_ids) == len(set(ordered_ids)) == total
+    assert {len(group.photo_ids) for group in groups} <= {1, 2, 4}
+
+
+def test_agrupar_fotos_preserves_local_sequence_and_narrative_rhythm():
+    from provas.narrativa import agrupar_fotos
+
+    items = _photos(31)
+    groups = agrupar_fotos(items, seed=9)
+    ordered_ids = [photo_id for group in groups for photo_id in group.photo_ids]
+    output_positions = {photo_id: position for position, photo_id in enumerate(ordered_ids)}
+
+    assert groups[0].role == "opening" and len(groups[0].photo_ids) == 1
+    assert groups[-1].role == "ending" and len(groups[-1].photo_ids) == 1
+    assert all(abs(photo.index - output_positions[photo.id]) <= 8 for photo in items)
+    longest_dense_run = current_dense_run = 0
+    for group in groups:
+        current_dense_run = current_dense_run + 1 if group.density == "dense" else 0
+        longest_dense_run = max(longest_dense_run, current_dense_run)
+    assert longest_dense_run <= 2
+
+
+def test_agrupar_fotos_splits_a_three_photo_remainder_as_single_and_pair():
+    from provas.narrativa import agrupar_fotos
+
+    groups = agrupar_fotos(_photos(5), seed=1)
+
+    assert [len(group.photo_ids) for group in groups[1:-1]] == [1, 2]
+
+
+def test_photo_groups_are_immutable_and_seeded_results_are_repeatable():
+    from provas.narrativa import agrupar_fotos
+
+    first = agrupar_fotos(_photos(17), seed=123)
+    second = agrupar_fotos(_photos(17), seed=123)
+
+    assert first == second
+    with pytest.raises(FrozenInstanceError):
+        first[0].role = "changed"
+
+
+def test_agrupar_fotos_uses_seed_for_repeatable_narrative_variation():
+    from provas.narrativa import agrupar_fotos
+
+    first = agrupar_fotos(_photos(17), seed=0)
+    second = agrupar_fotos(_photos(17), seed=1)
+
+    assert first != second
+
+
+def test_agrupar_fotos_prefers_a_nearby_complement_over_a_similar_neighbor():
+    from provas.narrativa import agrupar_fotos
+
+    items = _photos(12)
+    items[0] = PhotoInfo(**{**items[0].__dict__, "quality": 1.0})
+    items[11] = PhotoInfo(**{**items[11].__dict__, "quality": 0.99})
+    for index in range(1, 11):
+        items[index] = PhotoInfo(**{**items[index].__dict__, "quality": 0.4, "similarity_group": index})
+    items[2] = PhotoInfo(**{**items[2].__dict__, "similarity_group": 1})
+
+    groups = agrupar_fotos(items, seed=1)
+    first_sequence = groups[1].photo_ids
+
+    assert "p1" in first_sequence
+    assert "p3" in first_sequence
+    assert "p2" not in first_sequence
+
+
+def test_score_cover_is_deterministic_and_favours_quality_with_diversity():
+    from provas.narrativa import score_cover
+
+    items = _photos(8)
+    ranked = score_cover(items)
+
+    assert ranked == score_cover(items)
+    assert ranked[0].id == "p0"
+    assert len({photo.id for photo in ranked}) == len(items)
