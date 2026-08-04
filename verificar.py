@@ -21,7 +21,7 @@ OK, FALHA, AVISO = "  ok ", "FALHA", "aviso"
 DEPENDENCIAS = (
     ("PIL", "Pillow", "10.0"), ("pymupdf", "PyMuPDF", "1.24"),
     ("PySide6", "PySide6", "6.7"), ("packaging", "packaging", "23.0"),
-    ("numpy", "NumPy", "1.26"), ("cv2", "OpenCV", "4.10"),
+    ("numpy", "NumPy", "1.26"), ("cv2", "OpenCV", "4.10", "5"),
 )
 
 
@@ -29,12 +29,16 @@ def linha(estado: str, texto: str) -> None:
     print(f"[{estado}] {texto}")
 
 
-def versao_compativel(instalada: str, minima: str) -> bool:
+def versao_compativel(instalada: str, minima: str, maxima_exclusiva: str | None = None) -> bool:
     """Compare package versions according to PEP 440, including prereleases."""
     if Version is None:
         return False
     try:
-        return Version(instalada) >= Version(minima)
+        atual = Version(instalada)
+        return atual >= Version(minima) and (
+            maxima_exclusiva is None
+            or atual.release < Version(maxima_exclusiva).release
+        )
     except InvalidVersion:
         return False
 
@@ -48,19 +52,25 @@ def diagnosticar_dependencias() -> int:
     else:
         linha(OK, f"Python {python_atual} (mínimo 3.10)")
 
-    for modulo, apelido, minima in DEPENDENCIAS:
+    for dependencia in DEPENDENCIAS:
+        modulo, apelido, minima, *limite = dependencia
+        maxima_exclusiva = limite[0] if limite else None
+        faixa = (
+            f"suporte: {minima} até antes da versão {maxima_exclusiva}"
+            if maxima_exclusiva else f"mínimo {minima}"
+        )
         try:
             importado = __import__(modulo)
             versao = str(getattr(importado, "__version__", "0"))
         except ImportError:
             problemas += 1
-            linha(FALHA, f"{apelido} ausente; mínimo {minima}. Rode: python -m pip install .")
+            linha(FALHA, f"{apelido} ausente; {faixa}. Rode: python -m pip install .")
             continue
-        if versao_compativel(versao, minima):
-            linha(OK, f"{apelido} {versao} (mínimo {minima})")
+        if versao_compativel(versao, minima, maxima_exclusiva):
+            linha(OK, f"{apelido} {versao} ({faixa})")
         else:
             problemas += 1
-            linha(FALHA, f"{apelido} {versao}; mínimo exigido: {minima}.")
+            linha(FALHA, f"{apelido} {versao}; {faixa}.")
     return problemas
 
 

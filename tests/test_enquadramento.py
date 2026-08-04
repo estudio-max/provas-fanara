@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import builtins
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageDraw
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _photo(size: tuple[int, int] = (1000, 500)) -> Image.Image:
@@ -263,7 +268,7 @@ def test_verifier_lists_numpy_opencv_and_diagnoses_cascade(monkeypatch, capsys):
     import verificar
 
     assert ("numpy", "NumPy", "1.26") in verificar.DEPENDENCIAS
-    assert ("cv2", "OpenCV", "4.10") in verificar.DEPENDENCIAS
+    assert ("cv2", "OpenCV", "4.10", "5") in verificar.DEPENDENCIAS
 
     class Cascade:
         def __init__(self, path):
@@ -280,6 +285,38 @@ def test_verifier_lists_numpy_opencv_and_diagnoses_cascade(monkeypatch, capsys):
 
     assert verificar.diagnosticar_cascade(fake_cv2) == 0
     assert "cascade Haar local carregado" in capsys.readouterr().out
+
+
+def test_project_pins_opencv_to_the_supported_4x_line():
+    metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert '"opencv-python-headless>=4.10,<5"' in metadata
+
+
+@pytest.mark.parametrize("version", ["5.0.0", "5.0.0rc1", "6.0.0"])
+def test_verifier_rejects_opencv_5_or_newer_even_if_cascade_api_is_present(
+    monkeypatch, capsys, version
+):
+    import verificar
+
+    real_import = builtins.__import__
+    fake_cv2 = SimpleNamespace(
+        __version__=version,
+        CascadeClassifier=object,
+        data=SimpleNamespace(haarcascades="C:/opencv/data/"),
+    )
+
+    def import_with_opencv_5(name, *args, **kwargs):
+        if name == "cv2":
+            return fake_cv2
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_with_opencv_5)
+
+    assert verificar.diagnosticar_dependencias() == 1
+    output = capsys.readouterr().out
+    assert f"OpenCV {version}" in output
+    assert "suporte: 4.10 até antes da versão 5" in output
 
 
 def test_verifier_reports_missing_cascade_and_continues_other_diagnostics(monkeypatch, capsys):

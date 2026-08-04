@@ -5,7 +5,7 @@ Escopo: enquadramento local e proteção facial, sem integração ao renderer/UI
 
 ## Resultado
 
-Status: `DONE_WITH_CONCERNS`.
+Status final: `DONE`.
 
 Foram implementados:
 
@@ -155,12 +155,79 @@ O Git emitiu apenas avisos informativos de que `pyproject.toml` e `verificar.py`
 
 ## Impacto de dependência
 
-- Runtime acrescentado: `opencv-python-headless>=4.10` e `numpy>=1.26`.
+- Runtime acrescentado: `opencv-python-headless>=4.10,<5` e `numpy>=1.26`.
 - A detecção usa somente o cascade distribuído pelo OpenCV instalado localmente.
 - Nenhuma imagem, métrica ou telemetria é enviada; não há chamadas de rede no código.
 - A instalação via rede ocorreu somente no ambiente de desenvolvimento, após autorização explícita.
 
-## Concerns
+## Correção pós-revisão oficial
 
-1. O wheel `opencv-python-headless` 5.0.0.93 aceito pelo requisito `>=4.10` apresentou regressão/alteração de binding: `CascadeClassifier` ausente. O código diagnostica essa condição em PT-BR, mas a versão efetivamente validada foi 4.14.0.94. A política de versão/empacotamento deve ser fechada na Task 7, quando as dependências forem incorporadas ao executável.
-2. Empacotamento e execução fora da árvore não foram testados, deliberadamente: pertencem à Task 7 e estavam fora do escopo desta tarefa.
+O finding oficial confirmou que o requisito aberto ainda permitiria reinstalar o wheel 5.0.0.93 incompatível. A correção foi aplicada em três ciclos TDD.
+
+RED do pin de metadado:
+
+```text
+python -m pytest tests/test_enquadramento.py::test_project_pins_opencv_to_the_supported_4x_line -q
+1 failed
+AssertionError: assert '"opencv-python-headless>=4.10,<5"' in metadata
+```
+
+GREEN após fixar `opencv-python-headless>=4.10,<5`:
+
+```text
+python -m pytest tests/test_enquadramento.py::test_project_pins_opencv_to_the_supported_4x_line -q
+1 passed
+```
+
+RED do diagnóstico de major incompatível:
+
+```text
+python -m pytest tests/test_enquadramento.py::test_verifier_lists_numpy_opencv_and_diagnoses_cascade tests/test_enquadramento.py::test_verifier_rejects_opencv_5_or_newer_even_if_cascade_api_is_present -q
+2 failed
+AssertionError: limite superior 5 ausente em DEPENDENCIAS
+AssertionError: diagnosticar_dependencias() retornou 0 para OpenCV 5.0.0
+```
+
+GREEN após declarar suporte 4.x e rejeitar `major >= 5`:
+
+```text
+python -m pytest tests/test_enquadramento.py::test_verifier_lists_numpy_opencv_and_diagnoses_cascade tests/test_enquadramento.py::test_verifier_rejects_opencv_5_or_newer_even_if_cascade_api_is_present -q
+2 passed
+```
+
+RED adicional para interpretar `major >= 5` literalmente, inclusive pré-release:
+
+```text
+python -m pytest tests/test_enquadramento.py::test_verifier_rejects_opencv_5_or_newer_even_if_cascade_api_is_present -q
+.F. [100%]
+1 failed, 2 passed
+OpenCV 5.0.0rc1 foi aceito por ser menor que Version("5") segundo PEP 440
+```
+
+GREEN após comparar a release major antes do estado de pré-release:
+
+```text
+python -m pytest tests/test_enquadramento.py::test_verifier_rejects_opencv_5_or_newer_even_if_cascade_api_is_present -q
+... [100%]
+3 passed
+```
+
+Verificação combinada final:
+
+```text
+python -m pytest tests/test_enquadramento.py tests/test_cli.py -q
+............................................ [100%]
+44 passed
+
+python verificar.py
+[  ok ] OpenCV 4.14.0 (suporte: 4.10 até antes da versão 5)
+[  ok ] cascade Haar local carregado: haarcascade_frontalface_default.xml
+Tudo pronto.
+
+git diff --check
+exit 0
+```
+
+## Preocupações remanescentes
+
+Nenhuma dentro da Task 3. Empacotamento e execução fora da árvore continuam deliberadamente não testados porque pertencem à Task 7.
