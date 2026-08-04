@@ -103,7 +103,14 @@ def main() -> int:
         return 1
 
     with open(ENTRADA, "w", encoding="utf-8") as arquivo:
-        arquivo.write("from provas.app import principal\n\nprincipal()\n")
+        arquivo.write(
+            "import sys\n\n"
+            "if len(sys.argv) > 1:\n"
+            "    from provas_cli import main\n"
+            "    raise SystemExit(main(sys.argv[1:]))\n\n"
+            "from provas.app import principal\n\n"
+            "raise SystemExit(principal())\n"
+        )
 
     comando = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", NOME,
