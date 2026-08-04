@@ -94,3 +94,43 @@ Mensagem: `feat: compose curved cover identity`.
 Nenhuma preocupação funcional aberta. A primeira execução da suíte completa
 atingiu o timeout operacional de 120 s sem falha; repetida com 300 s, concluiu
 verde em 105,8 s.
+
+## Anexo — correções da revisão
+
+### RED
+
+1. `python -m pytest tests/test_capa_curvas.py::test_every_orbit_mask_keeps_the_lower_right_site_region_empty -q`
+   reproduziu a invasão de `site_rect`: variantes 2–9 falharam com pixels dos
+   slots `hero_right`, `right_lower` ou `lower_right` dentro da faixa reservada.
+2. `python -m pytest tests/test_identidade_capa.py::test_logo_content_keeps_alpha_and_reaches_4_5_contrast -q`
+   falhou para logo branco sobre fundo claro com contraste `1.097 < 4.5`.
+3. `python -m pytest tests/test_identidade_capa.py::test_logo_contrast_is_measured_against_canvas_pixels_under_its_alpha -q`
+   falhou nos dois cenários em que a paleta e os pixels locais divergiam,
+   provando que a implementação ainda media apenas `palette.fundo`.
+
+### GREEN
+
+- `render_mask` agora subtrai a faixa normalizada de `site_rect` de qualquer
+  slot. Isso cobre todos os nomes usados pelas variantes 1–9 sem alterar
+  `identity_safe_rect`, `logo_rect` ou os bounds dos slots. Os snapshots de
+  cobertura do `lower_right` foram atualizados em 1600×1131 e 800×566.
+- Um teste de composição cola fotos reais pelas máscaras e confirma que o site
+  é desenhado no fundo, sem qualquer pixel fotográfico sob o texto.
+- O logo é medido no conteúdo não transparente contra os pixels reais do canvas
+  sob seu alfa. A luminância relativa usa conversão sRGB linear; abaixo de
+  `4.5:1`, uma versão preta ou branca (a de maior contraste) substitui somente o
+  RGB e conserva o alfa. Logos já contrastantes permanecem inalterados.
+
+Verificação final solicitada:
+
+```text
+python -m pytest tests/test_identidade_capa.py tests/test_capa_curvas.py tests/test_capas_editoriais.py -q
+......................................................................   [100%]
+70 passed
+
+git diff --check
+exit 0
+```
+
+O único output adicional foi o aviso de normalização LF→CRLF do Git; não houve
+erro de whitespace. Nenhuma integração com motor, UI ou fotos foi adicionada.

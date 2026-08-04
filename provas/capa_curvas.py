@@ -261,4 +261,6 @@ def render_mask(slot: CurveSlot, size: tuple[int, int]) -> Image.Image:
     clipped = Image.new("L", (width, height), 0)
     crop_box = (slot.bounds.x, slot.bounds.y, slot.bounds.right, slot.bounds.bottom)
     clipped.paste(reduced.crop(crop_box), crop_box[:2])
+    site_rect = _scale_rect(_SITE_SAFE, width, height)
+    clipped.paste(0, (site_rect.x, site_rect.y, site_rect.right, site_rect.bottom))
     return clipped

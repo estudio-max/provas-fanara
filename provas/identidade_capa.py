@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
-from . import imagens, tema
+from . import tema
 from .capa_curvas import CurveLayout, PixelRect
 
 
@@ -17,6 +17,7 @@ _SITE_SIZES = tuple(range(18, 13, -1))
 _LOGO_MISSING = "O logotipo não foi encontrado; a capa foi criada sem ele."
 _LOGO_UNREADABLE = "O logotipo não pôde ser lido; a capa foi criada sem ele."
 _OVERFLOW_MESSAGE = "O texto da capa não cabe. Abrevie o conteúdo antes de exportar."
+_MINIMUM_LOGO_CONTRAST = 4.5
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,59 @@ class CoverTextOverflow(ValueError):
 
 def _rgb(color: tema.Cor) -> tuple[int, int, int]:
     return tuple(round(channel * 255) for channel in color)  # type: ignore[return-value]
+
+
+def _relative_luminance(color: tuple[int, int, int]) -> float:
+    channels = tuple(channel / 255 for channel in color)
+    linear = tuple(
+        channel / 12.92
+        if channel <= 0.04045
+        else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    )
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(first: float, second: float) -> float:
+    return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+
+
+def _logo_contrast(
+    logo: Image.Image,
+    background: Image.Image,
+) -> tuple[float, float]:
+    weighted_luminance = 0.0
+    weighted_background_luminance = 0.0
+    alpha_total = 0
+    for logo_pixel, background_pixel in zip(
+        logo.get_flattened_data(),
+        background.get_flattened_data(),
+    ):
+        red, green, blue, alpha = logo_pixel
+        if alpha:
+            weighted_luminance += _relative_luminance((red, green, blue)) * alpha
+            weighted_background_luminance += (
+                _relative_luminance(background_pixel) * alpha
+            )
+            alpha_total += alpha
+    if not alpha_total:
+        return 1.0, 0.0
+    content_luminance = weighted_luminance / alpha_total
+    background_luminance = weighted_background_luminance / alpha_total
+    return _contrast_ratio(content_luminance, background_luminance), background_luminance
+
+
+def _monochrome_for_contrast(
+    logo: Image.Image,
+    background_luminance: float,
+) -> Image.Image:
+    dark_contrast = _contrast_ratio(0.0, background_luminance)
+    light_contrast = _contrast_ratio(1.0, background_luminance)
+    color = (0, 0, 0) if dark_contrast >= light_contrast else (255, 255, 255)
+    monochrome = Image.new("RGBA", logo.size, (*color, 255))
+    with logo.getchannel("A") as alpha:
+        monochrome.putalpha(alpha)
+    return monochrome
 
 
 def _scale_for(canvas: Image.Image) -> float:
@@ -167,13 +221,12 @@ def _draw_identity_lines(
 def _prepare_logo(
     path: str,
     rect: PixelRect,
-    palette: tema.Paleta,
+    canvas: Image.Image,
 ) -> tuple[Image.Image | None, tuple[CoverWarning, ...]]:
     clean_path = path.strip()
     if not clean_path or not os.path.isfile(clean_path):
         return None, (CoverWarning("logo_ausente", _LOGO_MISSING),)
     logo: Image.Image | None = None
-    contrasted: Image.Image | None = None
     try:
         with Image.open(clean_path) as opened:
             transposed = ImageOps.exif_transpose(opened)
@@ -199,19 +252,28 @@ def _prepare_logo(
         cropped = logo.crop(alpha_bounds)
         logo.close()
         logo = cropped
-        contrasted = logo if palette.claro else imagens.logo_bicolor(logo)
         contained = ImageOps.contain(
-            contrasted,
+            logo,
             (rect.width, rect.height),
             Image.Resampling.LANCZOS,
         )
         contained.load()
+        x = rect.x + (rect.width - contained.width) // 2
+        y = rect.y + (rect.height - contained.height) // 2
+        with canvas.crop((x, y, x + contained.width, y + contained.height)) as crop:
+            with crop.convert("RGB") as local_background:
+                contrast, background_luminance = _logo_contrast(
+                    contained,
+                    local_background,
+                )
+        if contrast < _MINIMUM_LOGO_CONTRAST:
+            monochrome = _monochrome_for_contrast(contained, background_luminance)
+            contained.close()
+            contained = monochrome
         return contained, ()
     except (OSError, SyntaxError, ValueError):
         return None, (CoverWarning("logo_ilegivel", _LOGO_UNREADABLE),)
     finally:
-        if contrasted is not None and contrasted is not logo:
-            contrasted.close()
         if logo is not None:
             logo.close()
 
@@ -234,7 +296,7 @@ def render_identity(
         if site
         else None
     )
-    logo, warnings = _prepare_logo(data.logo_path, layout.logo_rect, palette)
+    logo, warnings = _prepare_logo(data.logo_path, layout.logo_rect, canvas)
 
     identity_colors = (
         ((palette.texto,) if title else ())

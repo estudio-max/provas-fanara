@@ -6,7 +6,7 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw
 
 from provas import tema
-from provas.capa_curvas import CurveLayout, PixelRect, layout_orbita
+from provas.capa_curvas import CurveLayout, PixelRect, layout_orbita, render_mask
 
 
 def _changed_bbox(before: Image.Image, after: Image.Image) -> PixelRect | None:
@@ -23,6 +23,27 @@ def _color_bbox(image: Image.Image, color: tuple[int, int, int]) -> PixelRect | 
     if bbox is None:
         return None
     return PixelRect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+
+
+def _contrast_ratio(
+    foreground: tuple[int, int, int],
+    background: tuple[int, int, int],
+) -> float:
+    def luminance(color: tuple[int, int, int]) -> float:
+        channels = tuple(channel / 255 for channel in color)
+        linear = tuple(
+            channel / 12.92
+            if channel <= 0.04045
+            else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in channels
+        )
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    foreground_luminance = luminance(foreground)
+    background_luminance = luminance(background)
+    return (max(foreground_luminance, background_luminance) + 0.05) / (
+        min(foreground_luminance, background_luminance) + 0.05
+    )
 
 
 def test_identity_records_are_immutable_and_overflow_is_a_value_error():
@@ -69,6 +90,33 @@ def test_each_text_field_is_deterministic_and_stays_inside_its_safe_rect(data, r
             "logo_ausente", "O logotipo não foi encontrado; a capa foi criada sem ele."
         ),
     )
+
+
+def test_site_text_is_composed_over_background_without_photo_pixels():
+    from provas.identidade_capa import IdentityData, render_identity
+
+    size = (1600, 1131)
+    palette = tema.paleta()
+    layout = layout_orbita(*size, 9)
+    canvas = Image.new("RGB", size, palette.fundo_rgb)
+    photo_color = (255, 0, 255)
+    photo = Image.new("RGB", size, photo_color)
+    for slot in layout.slots:
+        with render_mask(slot, size) as mask:
+            canvas.paste(photo, (0, 0), mask)
+
+    render_identity(canvas, layout, IdentityData("", "", "fanara.example"), palette)
+
+    site = canvas.crop(
+        (
+            layout.site_rect.x,
+            layout.site_rect.y,
+            layout.site_rect.right,
+            layout.site_rect.bottom,
+        )
+    )
+    assert photo_color not in set(site.get_flattened_data())
+    assert set(site.get_flattened_data()) != {palette.fundo_rgb}
 
 
 def test_title_and_studio_have_distinct_balanced_lines_and_empty_optional_fields_are_omitted():
@@ -229,6 +277,93 @@ def test_alpha_logo_preserves_transparency_and_dark_palette_converts_black_for_c
     assert canvas.getpixel((changed.x, changed.y)) == palette.fundo_rgb
     center = (changed.x + changed.width // 2, changed.y + changed.height // 2)
     assert canvas.getpixel(center) == (255, 255, 255)
+
+
+@pytest.mark.parametrize(
+    ("source_color", "background"),
+    [
+        ((255, 255, 255), "#F7F4EF"),
+        ((0, 0, 0), "#16161A"),
+        ((0, 0, 0), "#F7F4EF"),
+        ((255, 255, 255), "#16161A"),
+    ],
+)
+def test_logo_content_keeps_alpha_and_reaches_4_5_contrast(
+    tmp_path,
+    source_color,
+    background,
+):
+    from provas.identidade_capa import IdentityData, render_identity
+
+    path = tmp_path / f"logo-{source_color[0]}-{background[1:]}.png"
+    logo = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(logo).ellipse((50, 25, 149, 74), fill=(*source_color, 255))
+    logo.save(path)
+    logo.close()
+    palette = tema.paleta(background)
+    original = Image.new("RGB", (1600, 1131), palette.fundo_rgb)
+    canvas = original.copy()
+
+    warnings = render_identity(
+        canvas,
+        layout_orbita(1600, 1131, 6),
+        IdentityData("", "", "", str(path)),
+        palette,
+    )
+
+    changed = _changed_bbox(original, canvas)
+    assert warnings == ()
+    assert changed is not None
+    center = (changed.x + changed.width // 2, changed.y + changed.height // 2)
+    rendered_color = canvas.getpixel(center)
+    assert _contrast_ratio(rendered_color, palette.fundo_rgb) >= 4.5
+    if _contrast_ratio(source_color, palette.fundo_rgb) >= 4.5:
+        assert rendered_color == source_color
+    assert canvas.getpixel((changed.x, changed.y)) == palette.fundo_rgb
+
+
+@pytest.mark.parametrize(
+    ("palette_background", "local_background", "source_color"),
+    [
+        ("#F7F4EF", (12, 12, 14), (255, 255, 255)),
+        ("#16161A", (245, 245, 242), (0, 0, 0)),
+    ],
+)
+def test_logo_contrast_is_measured_against_canvas_pixels_under_its_alpha(
+    tmp_path,
+    palette_background,
+    local_background,
+    source_color,
+):
+    from provas.identidade_capa import IdentityData, render_identity
+
+    path = tmp_path / "logo-local.png"
+    logo = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(logo).ellipse((50, 25, 149, 74), fill=(*source_color, 255))
+    logo.save(path)
+    logo.close()
+    palette = tema.paleta(palette_background)
+    layout = layout_orbita(1600, 1131, 6)
+    canvas = Image.new("RGB", (1600, 1131), palette.fundo_rgb)
+    ImageDraw.Draw(canvas).rectangle(
+        (
+            layout.logo_rect.x,
+            layout.logo_rect.y,
+            layout.logo_rect.right - 1,
+            layout.logo_rect.bottom - 1,
+        ),
+        fill=local_background,
+    )
+
+    render_identity(canvas, layout, IdentityData("", "", "", str(path)), palette)
+
+    center = (
+        layout.logo_rect.x + layout.logo_rect.width // 2,
+        layout.logo_rect.y + layout.logo_rect.height // 2,
+    )
+    rendered_color = canvas.getpixel(center)
+    assert rendered_color == source_color
+    assert _contrast_ratio(rendered_color, local_background) >= 4.5
 
 
 def test_opaque_white_logo_background_uses_the_existing_cutout_behavior(tmp_path):

@@ -59,6 +59,23 @@ def test_dense_variants_keep_the_exact_central_identity_region(count):
     assert layout_orbita(1600, 1131, count).identity_safe_rect == PixelRect(608, 385, 384, 339)
 
 
+@pytest.mark.parametrize("count", range(1, 10))
+def test_every_orbit_mask_keeps_the_lower_right_site_region_empty(count):
+    size = (1600, 1131)
+    layout = layout_orbita(*size, count)
+    site_box = (
+        layout.site_rect.x,
+        layout.site_rect.y,
+        layout.site_rect.right,
+        layout.site_rect.bottom,
+    )
+
+    for slot in layout.slots:
+        with render_mask(slot, size) as mask:
+            with mask.crop(site_box) as site_pixels:
+                assert site_pixels.getbbox() is None, (count, slot.id)
+
+
 def test_orbit_variants_are_immutable_and_indexed_one_through_nine():
     assert tuple(ORBIT_VARIANTS) == tuple(range(1, 10))
     assert all(len(ORBIT_VARIANTS[count]) == count for count in range(1, 10))
@@ -135,7 +152,7 @@ def test_representative_a4_geometry_snapshot():
         ("side_left", (32, 317, 528, 463), 0.7840),
         ("side_right", (1040, 317, 528, 463), 0.7839),
         ("lower_left", (48, 792, 704, 305), 0.7835),
-        ("lower_right", (848, 792, 704, 305), 0.7834),
+        ("lower_right", (848, 792, 704, 305), 0.7201),
     )
 
 
@@ -149,7 +166,7 @@ def test_nine_photo_and_smaller_proportional_geometry_snapshots():
         ("lower_left", (32, 792, 368, 305), 0.7839),
         ("lower_center_left", (424, 792, 360, 305), 0.7839),
         ("lower_center_right", (816, 792, 360, 305), 0.7840),
-        ("lower_right", (1200, 792, 368, 305), 0.7839),
+        ("lower_right", (1200, 792, 368, 305), 0.6463),
     )
     assert _snapshot(layout_orbita(800, 566, 6), (800, 566)) == (
         ("upper_left", (24, 17, 352, 153), 0.7820),
@@ -157,7 +174,7 @@ def test_nine_photo_and_smaller_proportional_geometry_snapshots():
         ("side_left", (16, 158, 264, 233), 0.7803),
         ("side_right", (520, 158, 264, 233), 0.7803),
         ("lower_left", (24, 396, 352, 153), 0.7820),
-        ("lower_right", (424, 396, 352, 153), 0.7819),
+        ("lower_right", (424, 396, 352, 153), 0.7167),
     )
 
 
