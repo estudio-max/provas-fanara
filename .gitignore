@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+build/
+*.spec
+config.json
+tmp/
+.superpowers/
+*.pdf
+*.fotolivro.json
