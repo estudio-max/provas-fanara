@@ -37,3 +37,17 @@ def test_gerar_uses_editorial_mosaic_as_the_default_style():
 
     assert generated == fallback
     assert generated.ancora >= 0.60
+
+
+def test_legacy_cover_constructor_remains_valid_with_identity_metadata_defaults():
+    from provas.capas import Capa
+
+    image = Image.new("RGB", (16, 11), (20, 20, 20))
+
+    cover = Capa(image, 0.72)
+
+    assert cover.imagem is image
+    assert cover.ancora == 0.72
+    assert cover.identity_embedded is False
+    assert cover.warnings == ()
+    assert cover.used_photo_ids == ()

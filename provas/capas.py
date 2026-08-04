@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw
 
 from . import imagens, tema
+from .identidade_capa import CoverWarning
 
 COVER_STYLES = ("mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
@@ -18,6 +19,9 @@ SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda l
 class Capa:
     imagem: Image.Image
     ancora: float            # altura relativa (0..1) onde o bloco de texto começa
+    identity_embedded: bool = False
+    warnings: tuple[CoverWarning, ...] = ()
+    used_photo_ids: tuple[str, ...] = ()
 
 
 def validate_cover_style(value: str) -> str:
