@@ -21,6 +21,7 @@ OK, FALHA, AVISO = "  ok ", "FALHA", "aviso"
 DEPENDENCIAS = (
     ("PIL", "Pillow", "10.0"), ("pymupdf", "PyMuPDF", "1.24"),
     ("PySide6", "PySide6", "6.7"), ("packaging", "packaging", "23.0"),
+    ("numpy", "NumPy", "1.26"), ("cv2", "OpenCV", "4.10"),
 )
 
 
@@ -105,6 +106,30 @@ def diagnosticar_fontes() -> int:
     return 0
 
 
+def diagnosticar_cascade(cv2_module=None) -> int:
+    """Valide a presença e o carregamento do cascade Haar distribuído pelo OpenCV."""
+    try:
+        if cv2_module is None:
+            import cv2 as cv2_module
+        pasta = getattr(getattr(cv2_module, "data", None), "haarcascades", "")
+        caminho = os.path.join(pasta, "haarcascade_frontalface_default.xml")
+        if not pasta or not os.path.isfile(caminho):
+            linha(FALHA, f"cascade Haar local não encontrado: {caminho or '(caminho indisponível)'}")
+            return 1
+        cascade = cv2_module.CascadeClassifier(caminho)
+        if cascade.empty():
+            linha(FALHA, f"cascade Haar local não pôde ser carregado: {caminho}")
+            return 1
+        linha(OK, f"cascade Haar local carregado: {os.path.basename(caminho)}")
+        return 0
+    except ImportError:
+        linha(FALHA, "cascade Haar local não diagnosticado porque o OpenCV está ausente.")
+        return 1
+    except Exception as erro:
+        linha(FALHA, f"falha ao diagnosticar o cascade Haar local: {type(erro).__name__}: {erro}")
+        return 1
+
+
 def testar_pipeline_editorial() -> int:
     """Exercise the same A4-landscape, unrotated editorial export used by the UI."""
     try:
@@ -141,6 +166,7 @@ def main(_argv: list[str] | None = None) -> int:
     print(f"Python  : {sys.version.split()[0]}\n")
 
     problemas = diagnosticar_dependencias()
+    problemas += diagnosticar_cascade()
     problemas += testar_escrita()
     diagnosticar_fontes()
     if problemas:
