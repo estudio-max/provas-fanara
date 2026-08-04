@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import os
 import statistics
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -267,6 +268,31 @@ def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
     )
 
 
+def _render_style_fingerprint(config: Config, mode: str) -> tuple[object, ...]:
+    """Describe every config input that can alter an internal rendered page."""
+    logo_path = config.logo.strip()
+    logo_state: tuple[object, ...] = (os.path.abspath(logo_path), None, None)
+    if logo_path:
+        try:
+            stat = os.stat(logo_path)
+            logo_state = (os.path.abspath(logo_path), stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            pass
+    return (
+        mode,
+        config.titulo,
+        config.subtitulo,
+        config.estudio,
+        config.site,
+        config.cor_fundo,
+        config.qualidade,
+        config.marca_dagua,
+        config.marca_opacidade,
+        config.marca_largura,
+        logo_state,
+    )
+
+
 def gerar_preview(
     config: Config,
     plan: BookPlan,
@@ -279,9 +305,19 @@ def gerar_preview(
     assets, _ = _prepare_render_assets(config, plan, progresso, cancelar)
     thumbnails = []
     total = len(plan.pages)
+    style_fingerprint = _render_style_fingerprint(config, plan.mode)
     for index, page_plan in enumerate(plan.pages, start=1):
         _avisar(progresso, index - 1, max(1, total), "Renderizando prévia…", cancelar)
-        thumbnails.append(preview.render_page_thumbnail(plan, page_plan.number, assets, width))
+        thumbnails.append(
+            preview.render_page_thumbnail(
+                plan,
+                page_plan.number,
+                assets,
+                width,
+                document_factory=lambda: _new_editorial_document(config, plan.mode),
+                style_fingerprint=style_fingerprint,
+            )
+        )
         _avisar(progresso, index, max(1, total), f"Prévia… página {index}/{total}", cancelar)
     return tuple(thumbnails)
 
@@ -330,6 +366,20 @@ def _validate_export(path: str, expected_pages: int) -> None:
                 raise ValueError("PDF inválido: página fora do tamanho A4")
 
 
+def _new_sibling_temp(destination: str) -> str:
+    """Reserve a unique, owned temporary beside the final PDF."""
+    absolute = os.path.abspath(destination)
+    directory = os.path.dirname(absolute)
+    os.makedirs(directory, exist_ok=True)
+    descriptor, path = tempfile.mkstemp(
+        dir=directory,
+        prefix=f".{os.path.basename(destination)}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    return path
+
+
 def exportar(
     config: Config,
     plan: BookPlan,
@@ -342,13 +392,11 @@ def exportar(
     config = config.com_padroes()
     assets, analysis = _prepare_render_assets(config, plan, progresso, cancelar)
     destination = config.saida
-    temporary = f"{destination}.tmp"
-    os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
-    doc = _new_editorial_document(config, plan.mode)
+    temporary = _new_sibling_temp(destination)
+    doc: documento.Documento | None = None
     cover_rendered = False
     try:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        doc = _new_editorial_document(config, plan.mode)
         cover_rendered = _render_cover(
             doc, config, plan, {photo.id: photo for photo in analysis.photos},
         )
@@ -368,10 +416,12 @@ def exportar(
             raise Cancelado()
         os.replace(temporary, destination)
     finally:
-        doc.fechar()
+        if doc is not None:
+            doc.fechar()
         if os.path.exists(temporary):
             os.unlink(temporary)
-    _avisar(progresso, len(plan.pages), max(1, len(plan.pages)), "Pronto.", cancelar)
+    if progresso:
+        progresso(len(plan.pages), max(1, len(plan.pages)), "Pronto.")
     photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
     return Resultado(
         destination, photo_count, len(plan.pages), list(analysis.failures),

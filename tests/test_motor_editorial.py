@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
 
@@ -169,3 +170,78 @@ def test_proof_and_clean_export_use_the_same_unwatermarked_cover_image(tmp_path:
             cover_images.append(pdf.extract_image(cover_xref)["image"])
 
     assert cover_images[0] == cover_images[1]
+
+
+def test_preview_pixels_match_export_with_custom_render_style(tmp_path: Path, image_factory):
+    from provas import motor, preview
+
+    preview.clear_cache()
+    path = image_factory("styled.jpg", size=(200, 300), color=(180, 50, 80))
+    plan = BookPlan(21, "fotolivro", (), (PagePlan(1, "single-portrait", (str(path),), "opening"),))
+    output = tmp_path / "styled.pdf"
+    config = motor.Config(
+        str(tmp_path), saida=str(output), capa_mosaico=False, cor_fundo="#1B4265",
+        titulo="Estilo", subtitulo="Compartilhado", estudio="Fanara",
+    )
+
+    thumbnail = motor.gerar_preview(config, plan, width=420)[0]
+    motor.exportar(config, plan)
+
+    with pymupdf.open(output) as pdf:
+        scale = 420 / pdf[0].rect.width
+        pixmap = pdf[0].get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+    assert thumbnail.size == (pixmap.width, pixmap.height)
+    assert thumbnail.tobytes() == pixmap.samples
+
+
+def test_cancellation_after_atomic_replace_returns_success(tmp_path: Path, image_factory, monkeypatch):
+    from provas import motor
+
+    path = image_factory("committed.jpg", size=(200, 300))
+    output = tmp_path / "committed.pdf"
+    plan = BookPlan(31, "prova", (), (PagePlan(1, "single-portrait", (str(path),), "opening"),))
+    config = motor.Config(str(tmp_path), saida=str(output), capa_mosaico=False)
+    cancelled = threading.Event()
+    real_replace = os.replace
+
+    def replace_then_cancel(source, destination):
+        real_replace(source, destination)
+        cancelled.set()
+
+    monkeypatch.setattr(motor.os, "replace", replace_then_cancel)
+
+    result = motor.exportar(config, plan, cancelar=cancelled)
+
+    assert result.saida == str(output)
+    assert output.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_concurrent_exports_use_distinct_owned_sibling_temps(tmp_path: Path, image_factory, monkeypatch):
+    from provas import motor
+
+    path = image_factory("concurrent.jpg", size=(200, 300))
+    output = tmp_path / "shared.pdf"
+    plan = BookPlan(41, "fotolivro", (), (PagePlan(1, "single-portrait", (str(path),), "opening"),))
+    config = motor.Config(str(tmp_path), saida=str(output), capa_mosaico=False)
+    barrier = threading.Barrier(2)
+    real_validate = motor._validate_export
+    temp_paths: list[str] = []
+    lock = threading.Lock()
+
+    def synchronized_validation(temp_path, expected_pages):
+        real_validate(temp_path, expected_pages)
+        with lock:
+            temp_paths.append(temp_path)
+        barrier.wait(timeout=5)
+
+    monkeypatch.setattr(motor, "_validate_export", synchronized_validation)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(motor.exportar, config, plan) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+
+    assert all(result.saida == str(output) for result in results)
+    assert len(set(temp_paths)) == 2
+    assert all(Path(path).parent == tmp_path and Path(path).suffix == ".tmp" for path in temp_paths)
+    assert not list(tmp_path.glob("*.tmp"))

@@ -68,6 +68,16 @@ def test_render_page_uses_a4_landscape_slots_without_cropping(
             assert (info.label in text) is (mode == "prova")
 
         actual_rects = [page.get_image_rects(image)[0] for image in page.get_images(full=True)]
+        extracted_colours = []
+        for image_entry in page.get_images(full=True):
+            extracted = pdf.extract_image(image_entry[0])["image"]
+            with Image.open(io.BytesIO(extracted)) as embedded:
+                extracted_colours.append(embedded.convert("RGB").getpixel((embedded.width // 2, embedded.height // 2)))
+        expected_colours = [(40 + index * 30, 80, 160) for index in range(len(infos))]
+        assert len(extracted_colours) == len(expected_colours)
+        for actual_colour, expected_colour in zip(extracted_colours, expected_colours):
+            assert actual_colour == pytest.approx(expected_colour, abs=2)
+
         for actual, info, slot in zip(actual_rects, infos, template.slots):
             slot_rect = _point_rect(slot.rect, page.rect.width, page.rect.height)
             assert actual.x0 >= slot_rect.x0 - 0.05
@@ -115,6 +125,32 @@ def test_thumbnail_reuses_pdf_rendering_rules_and_cache(image_factory):
 
     assert first is second
     assert first.size == (420, pytest.approx(420 / (297 / 210), abs=1))
+
+
+def test_thumbnail_cache_fingerprints_asset_content_and_is_lru_bounded(image_factory, monkeypatch):
+    from provas import preview
+    from provas.documento import RenderAsset
+
+    preview.clear_cache()
+    monkeypatch.setattr(preview, "_CACHE_LIMIT", 2)
+    path = image_factory("vertical.jpg", size=(200, 300))
+    info = _photo(path, 0)
+    plan = BookPlan(91, "prova", (), (PagePlan(1, "single-portrait", (info.id,), "opening"),))
+
+    def asset(color):
+        image = Image.new("RGB", (200, 300), color)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG")
+        return {info.id: RenderAsset(info.id, info.label, buffer.getvalue(), 200, 300)}
+
+    red = preview.render_page_thumbnail(plan, 1, asset((220, 20, 20)), 300)
+    blue = preview.render_page_thumbnail(plan, 1, asset((20, 20, 220)), 300)
+    preview.render_page_thumbnail(plan, 1, asset((20, 220, 20)), 301)
+    red_again = preview.render_page_thumbnail(plan, 1, asset((220, 20, 20)), 300)
+
+    assert red.tobytes() != blue.tobytes()
+    assert red_again is not red
+    assert len(preview._CACHE) == 2
 
 
 def test_render_asset_keeps_jpeg_stream_for_pdf_embedding(image_factory):
