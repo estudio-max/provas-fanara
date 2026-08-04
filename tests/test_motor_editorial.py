@@ -25,6 +25,29 @@ def test_config_editorial_defaults_and_tuple_normalization(tmp_path: Path):
     assert config.cover_ids == ("a", "b")
 
 
+def test_config_defaults_validate_unknown_cover_style_in_portuguese(tmp_path: Path):
+    from provas.motor import Config
+
+    with pytest.raises(
+        ValueError,
+        match="Estilo de capa inválido. Use mosaico ou curvas_editoriais.",
+    ):
+        Config(str(tmp_path), estilo_capa="desconhecido").com_padroes()
+
+
+def test_project_round_trip_preserves_curved_editorial_cover_style(tmp_path: Path):
+    from provas.motor import Config
+    from provas.projeto import ProjectState, load_project, save_project
+
+    config = Config(str(tmp_path), estilo_capa="curvas_editoriais")
+    state = ProjectState(config, BookPlan(1, "prova", (), ()))
+    destination = tmp_path / "curvas.json"
+
+    save_project(destination, state)
+
+    assert load_project(destination).config.estilo_capa == "curvas_editoriais"
+
+
 def test_gerar_plano_analyzes_valid_photos_and_composes_configured_plan(tmp_path: Path, image_factory):
     from provas.motor import Config, gerar_plano
 

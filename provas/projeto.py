@@ -14,11 +14,12 @@ from types import MappingProxyType
 from typing import Iterable, Mapping
 
 from .compositor import compose
+from .capas import validate_cover_style
 from .modelos import BookPlan, PagePlan, PhotoInfo
 from .motor import Config
 
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 LONG_ALBUM_PAGE_LIMIT = 20
 LOW_QUALITY_THRESHOLD = 0.35
 
@@ -58,6 +59,7 @@ class ProjectConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cover_ids", tuple(self.cover_ids))
+        object.__setattr__(self, "estilo_capa", validate_cover_style(self.estilo_capa))
 
     @classmethod
     def from_motor_config(cls, config: Config) -> "ProjectConfig":
@@ -165,12 +167,29 @@ def _state_to_data(state: ProjectState) -> dict[str, object]:
     }
 
 
-def _state_from_data(data: object) -> ProjectState:
+def _migrate_project(data: object) -> dict[str, object]:
+    """Upgrade a supported project payload without mutating its source data."""
     if not isinstance(data, dict):
         raise ProjectSchemaError("Projeto inválido: conteúdo JSON esperado.")
     version = data.get("schema_version")
-    if version != PROJECT_SCHEMA_VERSION:
+    if version == PROJECT_SCHEMA_VERSION:
+        return dict(data)
+    if version != 1:
         raise ProjectSchemaError(f"A versão do projeto {version!r} não é suportada.")
+
+    migrated = dict(data)
+    config = data.get("config")
+    if not isinstance(config, dict):
+        raise ProjectSchemaError("Projeto inválido: metadados malformados.")
+    migrated_config = dict(config)
+    migrated_config.setdefault("estilo_capa", "mosaico")
+    migrated["config"] = migrated_config
+    migrated["schema_version"] = PROJECT_SCHEMA_VERSION
+    return migrated
+
+
+def _state_from_data(data: object) -> ProjectState:
+    data = _migrate_project(data)
     try:
         config_data = data["config"]
         if not isinstance(config_data, dict):

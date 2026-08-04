@@ -8,7 +8,8 @@ from PIL import Image, ImageDraw
 
 from . import imagens, tema
 
-ESTILOS = ("mosaico", "losango", "destaque")
+COVER_STYLES = ("mosaico", "curvas_editoriais")
+ESTILOS = COVER_STYLES
 
 SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda lisa
 
@@ -17,6 +18,13 @@ SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda l
 class Capa:
     imagem: Image.Image
     ancora: float            # altura relativa (0..1) onde o bloco de texto começa
+
+
+def validate_cover_style(value: str) -> str:
+    """Return a supported cover style or explain the valid choices in PT-BR."""
+    if value not in COVER_STYLES:
+        raise ValueError("Estilo de capa inválido. Use mosaico ou curvas_editoriais.")
+    return value
 
 
 def _amostrar(itens: list, quantidade: int) -> list:

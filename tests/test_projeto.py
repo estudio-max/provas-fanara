@@ -50,11 +50,47 @@ def test_save_and_load_round_trip_unicode_windows_metadata_without_image_bytes(t
     raw = destination.read_text(encoding="utf-8")
     payload = json.loads(raw)
 
-    assert payload["schema_version"] == PROJECT_SCHEMA_VERSION == 1
+    assert payload["schema_version"] == PROJECT_SCHEMA_VERSION == 2
     assert "Júlia" in raw
     assert "\\u00fa" not in raw
     assert "image_bytes" not in raw
     assert load_project(destination) == state
+
+
+def test_load_migrates_v1_project_to_default_cover_style_without_losing_identity(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    legacy = projeto._state_to_data(state)
+    legacy["schema_version"] = 1
+    legacy["config"].pop("estilo_capa")
+    legacy["config"].update({
+        "estudio": "Estúdio Fanara",
+        "site": "fanara.example",
+        "logo": "C:\\identidade\\marca.png",
+    })
+    source = tmp_path / "legado.json"
+    source.write_text(json.dumps(legacy), encoding="utf-8")
+
+    migrated = projeto.load_project(source)
+    destination = tmp_path / "migrado.json"
+    projeto.save_project(destination, migrated)
+
+    assert migrated.config.estilo_capa == "mosaico"
+    assert migrated.config.estudio == "Estúdio Fanara"
+    assert migrated.config.site == "fanara.example"
+    assert migrated.config.logo == "C:\\identidade\\marca.png"
+    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_project_config_rejects_unknown_cover_style_in_portuguese(tmp_path: Path):
+    from provas.projeto import ProjectConfig
+
+    with pytest.raises(
+        ValueError,
+        match="Estilo de capa inválido. Use mosaico ou curvas_editoriais.",
+    ):
+        ProjectConfig(pasta=str(tmp_path), estilo_capa="desconhecido")
 
 
 def test_project_state_snapshots_config_so_external_or_direct_mutation_cannot_diverge_seed(tmp_path: Path):
@@ -90,7 +126,7 @@ def test_load_rejects_a_future_schema_in_portuguese(tmp_path: Path):
     from provas.projeto import ProjectSchemaError, load_project
 
     destination = tmp_path / "future.json"
-    destination.write_text(json.dumps({"schema_version": 2}), encoding="utf-8")
+    destination.write_text(json.dumps({"schema_version": 3}), encoding="utf-8")
 
     with pytest.raises(ProjectSchemaError, match="versão.*não é suportada"):
         load_project(destination)

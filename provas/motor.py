@@ -80,8 +80,10 @@ class Config:
         titulo = self.titulo.strip() or nome
         subtitulo = self.subtitulo.strip() or date.today().strftime("%d.%m.%Y")
         saida = self.saida.strip() or os.path.join(pasta, f"{nome} - provas.pdf")
+        estilo_capa = capas.validate_cover_style(self.estilo_capa)
         return Config(**{**self.__dict__, "pasta": pasta, "titulo": titulo,
-                         "subtitulo": subtitulo, "saida": saida})
+                         "subtitulo": subtitulo, "saida": saida,
+                         "estilo_capa": estilo_capa})
 
 
 @dataclass
