@@ -22,7 +22,6 @@ COVER_STYLES = ("classica", "mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
 
 SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda lisa
-_CLASSIC_PHOTO_TARGET = (1344, 825)
 
 
 @dataclass(frozen=True)
@@ -40,7 +39,11 @@ class CoverPhoto:
     image: Image.Image
 
 
-def _classic_face_safe(photo: PhotoInfo, crop: ClassicCrop | None = None) -> bool:
+def _classic_face_safe(
+    photo: PhotoInfo,
+    crop: ClassicCrop | None = None,
+    target_size: tuple[int, int] | None = None,
+) -> bool:
     """Tell whether the exact classic crop keeps every confident face fully visible."""
     from . import capa_classica
 
@@ -48,8 +51,9 @@ def _classic_face_safe(photo: PhotoInfo, crop: ClassicCrop | None = None) -> boo
     try:
         requested = crop or capa_classica.ClassicCrop()
         faces = tuple(capa_classica.enquadramento.detect_faces(source))
+        target = target_size or capa_classica.classic_photo_target()
         box = capa_classica.resolve_classic_crop_box(
-            source.size, _CLASSIC_PHOTO_TARGET, requested, faces
+            source.size, target, requested, faces
         )
         return all(
             face.x * source.width >= box.left
@@ -67,6 +71,7 @@ def selecionar_foto_classica(
     photos: Iterable[PhotoInfo],
     manual_id: str,
     crop: ClassicCrop | None = None,
+    target_size: tuple[int, int] | None = None,
 ) -> str:
     """Select one classic-cover photo without changing the caller-owned plan."""
     candidates = tuple(photos)
@@ -83,9 +88,14 @@ def selecionar_foto_classica(
             + photo.exposure * 0.14
             + photo.density * 0.08
         )
+        face_safe = (
+            _classic_face_safe(photo)
+            if crop is None and target_size is None
+            else _classic_face_safe(photo, crop, target_size)
+        )
         return (
             -(photo.width > photo.height),
-            -(_classic_face_safe(photo) if crop is None else _classic_face_safe(photo, crop)),
+            -face_safe,
             -quality,
             photo.index,
             photo.id,

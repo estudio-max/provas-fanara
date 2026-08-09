@@ -106,6 +106,15 @@ def layout_classico(width: int, height: int) -> ClassicLayout:
     )
 
 
+def classic_photo_target(
+    width: int = _DESIGN_SIZE[0],
+    height: int = _DESIGN_SIZE[1],
+) -> tuple[int, int]:
+    """Return the exact integer photo target for one classic-cover canvas."""
+    photo = layout_classico(width, height).photo
+    return (photo.width, photo.height)
+
+
 def _finite_clamped(value: float, lower: float, upper: float, fallback: float) -> float:
     try:
         numeric = float(value)
@@ -264,9 +273,10 @@ def render_classic_cover(
         raise ValueError("Forneça uma fotografia de capa válida.")
     photo.image.load()
     faces = enquadramento.detect_faces(photo.image) if crop.mode == "automatico" else ()
+    target_size = classic_photo_target(width, height)
     source_box = resolve_classic_crop_box(
         photo.image.size,
-        (layout.photo.width, layout.photo.height),
+        target_size,
         crop,
         faces,
     )
@@ -275,7 +285,7 @@ def render_classic_cover(
     try:
         with photo.image.convert("RGB") as rgb:
             with rgb.transform(
-                (layout.photo.width, layout.photo.height),
+                target_size,
                 Image.Transform.EXTENT,
                 (source_box.left, source_box.top, source_box.right, source_box.bottom),
                 resample=Image.Resampling.BICUBIC,

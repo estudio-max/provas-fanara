@@ -183,6 +183,70 @@ def test_classica_selection_rejects_faces_cut_by_the_renderer_crop(tmp_path: Pat
     assert resolver((2000, 1000), (1344, 825), classic.ClassicCrop(), unsafe_faces) == renderer_box
 
 
+def test_classica_selection_uses_the_exact_integer_renderer_target(monkeypatch):
+    from provas import capa_classica as classic
+    from provas import capas
+    from provas.enquadramento import FaceBox
+
+    source_size = (8000, 12000)
+    ranking_target = (1344, 825)
+    renderer_target = (1473, 904)
+    ranking_height = source_size[0] * ranking_target[1] / ranking_target[0] / source_size[1]
+    edge = 0.00001
+    face_height = 0.05
+    unsafe_faces = (
+        FaceBox(0.40, 0.5 - ranking_height / 2 + edge, 0.20, face_height, 1.0),
+        FaceBox(
+            0.40,
+            0.5 + ranking_height / 2 - edge - face_height,
+            0.20,
+            face_height,
+            1.0,
+        ),
+    )
+    safe_faces = (FaceBox(0.40, 0.45, 0.20, 0.10, 1.0),)
+
+    def faces_inside(box, faces):
+        return all(
+            face.x * source_size[0] >= box.left
+            and face.y * source_size[1] >= box.top
+            and (face.x + face.width) * source_size[0] <= box.right
+            and (face.y + face.height) * source_size[1] <= box.bottom
+            for face in faces
+        )
+
+    old_box = classic.resolve_classic_crop_box(
+        source_size, ranking_target, classic.ClassicCrop(), unsafe_faces
+    )
+    real_box = classic.resolve_classic_crop_box(
+        source_size, renderer_target, classic.ClassicCrop(), unsafe_faces
+    )
+    assert faces_inside(old_box, unsafe_faces) is True
+    assert faces_inside(real_box, unsafe_faces) is False
+
+    def open_source(photo):
+        fill = 0 if photo.caminho == "unsafe" else 1
+        return Image.new("1", source_size, fill)
+
+    def detected_faces(image):
+        return unsafe_faces if image.getpixel((0, 0)) == 0 else safe_faces
+
+    monkeypatch.setattr(capas.imagens, "abrir", open_source)
+    monkeypatch.setattr(classic.enquadramento, "detect_faces", detected_faces)
+    photos = (
+        PhotoInfo("unsafe", "unsafe", "unsafe", *source_size, 0, quality=1.0),
+        PhotoInfo("safe", "safe", "safe", *source_size, 1, quality=0.1),
+    )
+
+    assert capas.selecionar_foto_classica(photos, "") == "safe"
+    target_for = getattr(classic, "classic_photo_target", None)
+    assert callable(target_for)
+    assert target_for(1754, 1240) == renderer_target
+    assert capas.selecionar_foto_classica(
+        photos, "", target_size=renderer_target
+    ) == "safe"
+
+
 def test_classica_cover_fields_participate_in_the_render_fingerprint(tmp_path: Path):
     from provas import motor
 

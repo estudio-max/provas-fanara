@@ -16,7 +16,7 @@ from PIL import Image
 
 from . import capas, documento, imagens, preview, tema
 from .analise import AnalysisResult, analisar_fotos
-from .capa_classica import ClassicCrop, render_classic_cover
+from .capa_classica import ClassicCrop, classic_photo_target, render_classic_cover
 from .compositor import compose, validate_plan
 from .identidade_capa import CoverWarning, IdentityData
 from .modelos import BookPlan, PhotoInfo
@@ -473,8 +473,9 @@ def _render_cover(
                 config.capa_zoom,
                 config.capa_enquadramento,
             )
+            target_size = classic_photo_target(width, height)
             photo_id = capas.selecionar_foto_classica(
-                tuple(photos.values()), config.foto_capa_id, crop
+                tuple(photos.values()), config.foto_capa_id, crop, target_size
             )
             info = photos[photo_id]
             classic_source = imagens.abrir(imagens.Foto(info.path, info.label))
