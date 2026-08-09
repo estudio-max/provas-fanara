@@ -71,6 +71,21 @@ def _make_case(root: Path, name: str, total: int, orientation: str) -> Path:
     return session
 
 
+def _make_curved_case(root: Path, count: int, *, name: str = "curvas") -> Path:
+    """Create a small, unique mixed-orientation set for the curved-cover gate."""
+    session = root / name / "fotos"
+    session.mkdir(parents=True, exist_ok=True)
+    for index in range(count):
+        orientation = "portrait" if index % 2 == 0 else "landscape"
+        _synthetic_image(
+            session / f"ORBITA_{index + 1:02d}.jpg",
+            index + 40,
+            orientation,
+            detail=index % 3 != 0,
+        )
+    return session
+
+
 def _render_at_width(page: pymupdf.Page, width: int) -> Image.Image:
     scale = width / page.rect.width
     pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
@@ -270,6 +285,225 @@ def test_manual_cover_replacement_survives_preview_and_export(tmp_path: Path):
             cover.close()
 
 
+@pytest.mark.parametrize("count", range(1, 10))
+@pytest.mark.parametrize("mode", ("prova", "fotolivro"))
+def test_curved_cover_end_to_end(tmp_path: Path, count: int, mode: str):
+    session = _make_curved_case(tmp_path, count, name=f"matriz-{mode}-{count}")
+    output = tmp_path / f"curvas-{mode}-{count}.pdf"
+    config = motor.Config(
+        str(session),
+        saida=str(output),
+        titulo=f"Órbita {count}",
+        estudio="Estúdio Fanara",
+        site="fanara.com.br",
+        estilo_capa="curvas_editoriais",
+        modo=mode,
+        marca_dagua=mode == "prova",
+        mostrar_codigos=mode == "prova",
+        qualidade="leve",
+        semente=8100 + count,
+    )
+    analysis = motor.analisar_plano(config)
+    original_pages = analysis.plan.pages
+    preview = motor.gerar_preview(config, analysis.plan, width=320)
+    result = motor.exportar(config, analysis.plan)
+
+    assert analysis.failures == ()
+    assert analysis.plan.pages == original_pages
+    assert len(analysis.plan.cover_photo_ids) == count
+    assert len(set(analysis.plan.cover_photo_ids)) == count
+    assert result.fotos == count
+    with pymupdf.open(output) as pdf:
+        assert pdf.page_count == len(original_pages) + 1 == len(preview)
+        assert all(
+            (page.rect.width, page.rect.height) == pytest.approx(A4_LANDSCAPE, abs=0.2)
+            for page in pdf
+        )
+        rendered = _render_at_width(pdf[0], 320)
+        try:
+            assert rendered.tobytes() == preview[0].tobytes()
+        finally:
+            rendered.close()
+    for image in preview:
+        image.close()
+
+
+def test_invalid_logo_warns_and_exports(tmp_path: Path):
+    session = _make_curved_case(tmp_path, 3, name="logo-invalido")
+    logo = tmp_path / "logo-invalido.png"
+    logo.write_bytes(b"isto nao e uma imagem")
+    output = tmp_path / "logo-invalido.pdf"
+    config = motor.Config(
+        str(session), saida=str(output), titulo="Retratos", logo=str(logo),
+        estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
+    )
+    analysis = motor.analisar_plano(config)
+    preview = motor.gerar_preview(config, analysis.plan, width=320)
+    result = motor.exportar(config, analysis.plan)
+
+    assert result.warnings == preview.warnings
+    assert [warning.message for warning in result.warnings] == [
+        "O logotipo não pôde ser lido; a capa foi criada sem ele."
+    ]
+    with pymupdf.open(output) as pdf:
+        rendered = _render_at_width(pdf[0], 320)
+        try:
+            assert rendered.tobytes() == preview[0].tobytes()
+        finally:
+            rendered.close()
+    for image in preview:
+        image.close()
+
+
+def test_overlong_identity_blocks_export(tmp_path: Path):
+    from provas.identidade_capa import CoverTextOverflow
+
+    session = _make_curved_case(tmp_path, 1, name="identidade-longa")
+    output = tmp_path / "nao-publicar.pdf"
+    output.write_bytes(b"PDF anterior preservado")
+    previous = output.read_bytes()
+    config = motor.Config(
+        str(session), saida=str(output), titulo="X" * 500,
+        estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
+    )
+    analysis = motor.analisar_plano(config)
+    message = "O texto da capa não cabe. Abrevie o conteúdo antes de exportar."
+
+    with pytest.raises(CoverTextOverflow, match="Abrevie") as error:
+        motor.exportar(config, analysis.plan)
+    assert str(error.value) == message
+    assert output.read_bytes() == previous
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_missing_logo_keeps_balanced_cover(tmp_path: Path):
+    session = _make_curved_case(tmp_path, 6, name="sem-logo")
+    output = tmp_path / "sem-logo.pdf"
+    config = motor.Config(
+        str(session), saida=str(output), titulo="Retratos", estudio="Fanara",
+        site="fanara.com.br", logo=str(tmp_path / "nao-existe.png"),
+        estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
+    )
+    analysis = motor.analisar_plano(config)
+    preview = motor.gerar_preview(config, analysis.plan, width=320)
+    result = motor.exportar(config, analysis.plan)
+
+    assert analysis.plan.cover_photo_ids == tuple(dict.fromkeys(analysis.plan.cover_photo_ids))
+    assert [warning.message for warning in result.warnings] == [
+        "O logotipo não foi encontrado; a capa foi criada sem ele."
+    ]
+    assert result.warnings == preview.warnings
+    with pymupdf.open(output) as pdf:
+        rendered = _render_at_width(pdf[0], 320)
+        try:
+            assert rendered.tobytes() == preview[0].tobytes()
+        finally:
+            rendered.close()
+    for image in preview:
+        image.close()
+
+
+def test_edge_face_is_kept_inside_mask(tmp_path: Path, monkeypatch):
+    from provas import capas
+    from provas.enquadramento import FaceBox, frame_for_mask
+
+    session = _make_curved_case(tmp_path, 1, name="rosto-na-borda")
+    photo_path = next(session.glob("*.jpg"))
+    # Exactly on the 8% safe inset: visually near the edge, but protectable.
+    face = FaceBox(0.08, 0.08, 0.22, 0.24, confidence=0.96)
+    with Image.open(photo_path) as source:
+        framed = frame_for_mask(
+            source, (600, 900), (0.5, 0.35), detector=lambda _image: (face,)
+        )
+    assert framed.safe is True
+    assert framed.crop.contains(face.center)
+
+    original = capas.frame_for_mask
+    monkeypatch.setattr(
+        capas,
+        "frame_for_mask",
+        lambda image, size, focus: original(
+            image, size, focus, detector=lambda _image: (face,)
+        ),
+    )
+    config = motor.Config(
+        str(session), saida=str(tmp_path / "rosto-na-borda.pdf"), titulo="Retrato",
+        estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
+    )
+    analysis = motor.analisar_plano(config)
+    preview = motor.gerar_preview(config, analysis.plan, width=320)
+    result = motor.exportar(config, analysis.plan)
+    assert all(warning.code != "rosto_em_area_de_risco" for warning in result.warnings)
+    assert result.warnings == preview.warnings
+    for image in preview:
+        image.close()
+
+
+def test_automatic_cover_avoids_logo_over_detected_face(tmp_path: Path, monkeypatch):
+    from provas import capas, tema
+    from provas.enquadramento import CropRect, FaceBox, FrameResult
+    from provas.identidade_capa import IdentityData
+    from tests.visual_qa import _qa_logo
+
+    logo = tmp_path / "logo.png"
+    _qa_logo(logo, "horizontal")
+    covered = Image.new("RGB", (200, 300), (210, 170, 140))
+    clear = Image.new("RGB", (200, 300), (80, 110, 140))
+
+    def framed(image, target_size, _focus):
+        face = (
+            FaceBox(0.02, 0.02, 0.34, 0.25, 1.0)
+            if image is covered
+            else FaceBox(0.64, 0.16, 0.24, 0.22, 1.0)
+        )
+        return FrameResult(
+            image.resize(target_size), CropRect(0.0, 0.0, 1.0, 1.0), (face,), 1, True
+        )
+
+    monkeypatch.setattr(capas, "frame_for_mask", framed)
+    monkeypatch.setattr(capas, "_candidate_score", lambda *_args: (0,))
+    cover = capas.gerar_curvas_editoriais(
+        [capas.CoverPhoto("coberto", covered), capas.CoverPhoto("livre", clear)],
+        1600, 1131, tema.paleta(),
+        IdentityData("Retratos", "Fanara", "fanara.com.br", str(logo)),
+        seed=22,
+    )
+    try:
+        assert cover.used_photo_ids[0] == "livre"
+    finally:
+        cover.imagem.close()
+        covered.close()
+        clear.close()
+
+
+def test_manual_cover_choice_survives_regeneration(tmp_path: Path):
+    session = _make_curved_case(tmp_path, 9, name="capa-manual-regenerada")
+    initial_config = motor.Config(
+        str(session), estilo_capa="curvas_editoriais", modo="fotolivro", semente=501,
+    )
+    initial = motor.analisar_plano(initial_config)
+    manual_ids = tuple(reversed(initial.plan.cover_photo_ids))
+    regenerated_config = motor.Config(
+        str(session), saida=str(tmp_path / "capa-manual.pdf"),
+        estilo_capa="curvas_editoriais", modo="fotolivro", semente=777,
+        cover_ids=manual_ids, qualidade="leve",
+    )
+    regenerated = motor.analisar_plano(regenerated_config)
+    preview = motor.gerar_preview(regenerated_config, regenerated.plan, width=320)
+    motor.exportar(regenerated_config, regenerated.plan)
+
+    assert regenerated.plan.cover_photo_ids == manual_ids
+    assert regenerated_config.cover_ids == manual_ids
+    with pymupdf.open(regenerated_config.saida) as pdf:
+        rendered = _render_at_width(pdf[0], 320)
+        try:
+            assert rendered.tobytes() == preview[0].tobytes()
+        finally:
+            rendered.close()
+    for image in preview:
+        image.close()
+
+
 def test_packaged_executable_generates_both_modes_outside_source_tree(
     tmp_path: Path, built_package: Path,
 ):
@@ -410,3 +644,38 @@ def test_visual_qa_helper_renders_pages_at_120_dpi_and_contact_sheet(tmp_path: P
     with Image.open(page) as rendered:
         assert rendered.size == pytest.approx((1403, 992), abs=1)
     assert " / página " not in (ROOT / "tests" / "visual_qa.py").read_text(encoding="utf-8")
+
+
+def test_visual_qa_curved_case_builds_required_matrix(tmp_path: Path):
+    completed = subprocess.run(
+        [
+            sys.executable, str(ROOT / "tests" / "visual_qa.py"),
+            "--case", "curvas-editoriais", "--dpi", "120", "--output", str(tmp_path),
+        ],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    expected = {
+        f"count-{count:02d}-{tone}-{logo}-contact-sheet.png"
+        for count in (1, 3, 5, 6, 9)
+        for tone in ("claros", "escuros", "mistos")
+        for logo in ("horizontal", "vertical", "ausente")
+    }
+    assert expected <= {path.name for path in tmp_path.glob("*-contact-sheet.png")}
+    assert (tmp_path / "curvas-editoriais-overview.png").is_file()
+    assert all(path.stat().st_size > 0 for path in tmp_path.glob("*.png"))
+
+
+def test_visual_qa_synthetic_portrait_has_injectable_face_box(tmp_path: Path):
+    from tests import visual_qa
+
+    photo = tmp_path / "retrato.jpg"
+    visual_qa._qa_photo(photo, 0, "claros")
+    with Image.open(photo) as image:
+        faces = visual_qa._synthetic_face_detector(image)
+
+    assert len(faces) == 1
+    assert faces[0].confidence == 1.0
+    assert 0.10 < faces[0].width < 0.30
+    assert 0.10 < faces[0].height < 0.30

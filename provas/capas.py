@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 
 from . import imagens, tema
 from .capa_curvas import layout_orbita, render_mask
-from .enquadramento import frame_for_mask
+from .enquadramento import MIN_FACE_CONFIDENCE, FrameResult, frame_for_mask
 from .identidade_capa import CoverWarning, IdentityData, render_identity
 
 COVER_STYLES = ("mosaico", "curvas_editoriais")
@@ -76,6 +76,23 @@ def _candidate_score(
         digest = sha256(f"{seed}\0{slot.id}\0{photo.id}".encode("utf-8")).digest()
         seeded_tie = int.from_bytes(digest[:8], "big") / (2**64 - 1)
     return (orientation + quality + diversity + focus_score, seeded_tie, -source_rank)
+
+
+def _face_overlaps_identity_rect(frame: FrameResult, slot, rect) -> bool:
+    """Tell whether an identity overlay would hide a confidently detected face."""
+    if slot.bounds.intersection(rect).area == 0:
+        return False
+    crop = frame.crop
+    for face in frame.face_boxes:
+        if face.confidence < MIN_FACE_CONFIDENCE:
+            continue
+        left = slot.bounds.x + (face.x - crop.x) / crop.width * slot.bounds.width
+        top = slot.bounds.y + (face.y - crop.y) / crop.height * slot.bounds.height
+        right = left + face.width / crop.width * slot.bounds.width
+        bottom = top + face.height / crop.height * slot.bounds.height
+        if left < rect.right and right > rect.x and top < rect.bottom and bottom > rect.y:
+            return True
+    return False
 
 
 def validate_cover_style(value: str) -> str:
@@ -223,15 +240,23 @@ def gerar_curvas_editoriais(
                     if manual_order
                     else sorted(candidates, key=lambda candidate: candidate[2], reverse=True)
                 )
+
+                def is_safe_candidate(candidate) -> bool:
+                    frame = candidate[1]
+                    return frame.safe and not (
+                        identity.logo_path
+                        and _face_overlaps_identity_rect(frame, slot, layout.logo_rect)
+                    )
+
                 photo, framed, _ = (
                     ranked[0]
                     if manual_order
                     else next(
-                        (candidate for candidate in ranked if candidate[1].safe),
+                        (candidate for candidate in ranked if is_safe_candidate(candidate)),
                         ranked[0],
                     )
                 )
-                if not framed.safe:
+                if not is_safe_candidate((photo, framed, ())):
                     cover_warnings.append(
                         CoverWarning(
                             "rosto_em_area_de_risco",

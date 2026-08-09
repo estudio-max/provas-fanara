@@ -9,7 +9,14 @@ import pymupdf
 from PIL import Image, ImageDraw
 
 
-def render_pdf(pdf_path: Path, *, dpi: int = 120) -> tuple[int, Path]:
+CURVED_COUNTS = (1, 3, 5, 6, 9)
+CURVED_TONES = ("claros", "escuros", "mistos")
+CURVED_LOGOS = ("horizontal", "vertical", "ausente")
+
+
+def render_pdf(
+    pdf_path: Path, *, dpi: int = 120, contact_sheet: Path | None = None
+) -> tuple[int, Path]:
     pages_dir = pdf_path.parent / pdf_path.stem
     pages_dir.mkdir(parents=True, exist_ok=True)
     pages: list[Image.Image] = []
@@ -41,21 +48,190 @@ def render_pdf(pdf_path: Path, *, dpi: int = 120) -> tuple[int, Path]:
         )
         thumbnail.close()
         page.close()
-    contact_sheet = pdf_path.parent / f"{pdf_path.stem}-contact-sheet.png"
+    contact_sheet = contact_sheet or pdf_path.parent / f"{pdf_path.stem}-contact-sheet.png"
     sheet.save(contact_sheet, optimize=True)
     sheet.close()
     return len(pages), contact_sheet
 
 
+def _qa_photo(path: Path, index: int, tone: str) -> None:
+    portrait = index % 2 == 0
+    size = (400, 600) if portrait else (600, 400)
+    if tone == "claros":
+        base = (208 + index % 4 * 8, 198 + index % 3 * 9, 184 + index % 5 * 7)
+    elif tone == "escuros":
+        base = (28 + index % 4 * 10, 34 + index % 3 * 9, 42 + index % 5 * 8)
+    else:
+        base = (220, 200, 178) if index % 2 == 0 else (30, 42, 58)
+    image = Image.new("RGB", size, base)
+    draw = ImageDraw.Draw(image)
+    # A face-like editorial subject gives the visual inspector a stable focal point.
+    cx = round(size[0] * (0.31 if index % 3 == 0 else 0.78))
+    cy = round(size[1] * 0.34)
+    radius = round(min(size) * 0.12)
+    skin = (202, 151, 122) if tone != "escuros" else (142, 94, 74)
+    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=skin)
+    draw.ellipse((cx - radius // 3, cy - radius // 6, cx - radius // 6, cy), fill=(35, 28, 28))
+    draw.ellipse((cx + radius // 6, cy - radius // 6, cx + radius // 3, cy), fill=(35, 28, 28))
+    draw.arc((cx - radius // 3, cy, cx + radius // 3, cy + radius // 2), 10, 170, fill=(90, 38, 42), width=3)
+    draw.rectangle((22, size[1] - 54, min(size[0] - 22, 250), size[1] - 20), fill=(246, 244, 238))
+    draw.text((32, size[1] - 44), path.stem, fill=(22, 24, 27))
+    image.save(path, "JPEG", quality=94, subsampling=0)
+    image.close()
+
+
+def _synthetic_face_detector(image: Image.Image):
+    """Locate the deliberately skin-coloured QA face without pretending Haar saw it."""
+    from provas.enquadramento import FaceBox
+
+    rgb = image.convert("RGB")
+    try:
+        coordinates = [
+            (index % rgb.width, index // rgb.width)
+            for index, (red, green, blue) in enumerate(rgb.get_flattened_data())
+            if red - green >= 28 and green - blue >= 12 and red >= 115
+        ]
+    finally:
+        rgb.close()
+    if not coordinates:
+        return ()
+    left = min(x for x, _y in coordinates)
+    right = max(x for x, _y in coordinates) + 1
+    top = min(y for _x, y in coordinates)
+    bottom = max(y for _x, y in coordinates) + 1
+    return (
+        FaceBox(
+            left / image.width,
+            top / image.height,
+            (right - left) / image.width,
+            (bottom - top) / image.height,
+            confidence=1.0,
+        ),
+    )
+
+
+def _qa_logo(path: Path, orientation: str) -> None:
+    size = (420, 105) if orientation == "horizontal" else (140, 360)
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    inset = 8
+    draw.rounded_rectangle(
+        (inset, inset, size[0] - inset, size[1] - inset),
+        radius=18,
+        fill=(248, 248, 244, 255),
+        outline=(25, 28, 30, 255),
+        width=5,
+    )
+    draw.text((size[0] * 0.18, size[1] * 0.42), "FANARA", fill=(20, 22, 24, 255))
+    image.save(path)
+    image.close()
+
+
+def _build_overview(sheets: list[Path], output: Path) -> Path:
+    thumb_size = (300, 220)
+    caption_height = 30
+    columns = 5
+    rows = math.ceil(len(sheets) / columns)
+    overview = Image.new(
+        "RGB",
+        (columns * thumb_size[0], rows * (thumb_size[1] + caption_height)),
+        (226, 224, 219),
+    )
+    drawing = ImageDraw.Draw(overview)
+    for index, sheet_path in enumerate(sheets):
+        with Image.open(sheet_path) as source:
+            thumbnail = source.convert("RGB")
+        thumbnail.thumbnail(thumb_size, Image.Resampling.LANCZOS)
+        x = index % columns * thumb_size[0]
+        y = index // columns * (thumb_size[1] + caption_height)
+        overview.paste(thumbnail, (x, y))
+        drawing.text(
+            (x + 6, y + thumb_size[1] + 7),
+            sheet_path.stem.removesuffix("-contact-sheet"),
+            fill=(24, 25, 27),
+        )
+        thumbnail.close()
+    path = output / "curvas-editoriais-overview.png"
+    overview.save(path, optimize=True)
+    overview.close()
+    return path
+
+
+def build_curved_cases(output: Path, *, dpi: int = 120) -> tuple[Path, ...]:
+    """Generate the approved curved-cover matrix and render every PDF at ``dpi``."""
+    from provas import capas, motor
+    from provas.enquadramento import frame_for_mask
+
+    output.mkdir(parents=True, exist_ok=True)
+    fixtures = output / "_fixtures"
+    fixtures.mkdir(exist_ok=True)
+    logos: dict[str, str] = {"ausente": ""}
+    for orientation in ("horizontal", "vertical"):
+        logo = fixtures / f"logo-{orientation}.png"
+        _qa_logo(logo, orientation)
+        logos[orientation] = str(logo)
+
+    sheets: list[Path] = []
+    for count in CURVED_COUNTS:
+        for tone in CURVED_TONES:
+            photos = fixtures / f"count-{count:02d}-{tone}"
+            photos.mkdir(exist_ok=True)
+            for index in range(count):
+                photo = photos / f"RETRATO_{index + 1:02d}.jpg"
+                _qa_photo(photo, index, tone)
+            for logo_kind in CURVED_LOGOS:
+                stem = f"count-{count:02d}-{tone}-{logo_kind}"
+                pdf = output / f"{stem}.pdf"
+                config = motor.Config(
+                    str(photos),
+                    saida=str(pdf),
+                    titulo=f"Retratos {tone}",
+                    estudio="Estúdio Fanara",
+                    site="fanara.com.br",
+                    logo=logos[logo_kind],
+                    estilo_capa="curvas_editoriais",
+                    modo="fotolivro",
+                    qualidade="leve",
+                    semente=8600 + count,
+                )
+                analysis = motor.analisar_plano(config)
+                original_framer = capas.frame_for_mask
+                capas.frame_for_mask = lambda image, size, focus: frame_for_mask(
+                    image, size, focus, detector=_synthetic_face_detector
+                )
+                try:
+                    motor.exportar(config, analysis.plan)
+                finally:
+                    capas.frame_for_mask = original_framer
+                _page_count, sheet = render_pdf(
+                    pdf, dpi=dpi, contact_sheet=output / f"{stem}-contact-sheet.png"
+                )
+                sheets.append(sheet)
+    _build_overview(sheets, output)
+    return tuple(sheets)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("root", type=Path, help="diretório que contém os PDFs E2E")
+    parser.add_argument("root", nargs="?", type=Path, help="diretório que contém os PDFs E2E")
+    parser.add_argument("--case", choices=("curvas-editoriais",))
+    parser.add_argument("--dpi", type=int, default=120)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+    if args.case == "curvas-editoriais":
+        destination = args.output or args.root
+        if destination is None:
+            parser.error("--output é obrigatório para o caso curvas-editoriais")
+        sheets = build_curved_cases(destination, dpi=args.dpi)
+        print(f"Matriz curvas-editoriais: {len(sheets)} folhas -> {destination}")
+        return 0
+    if args.root is None:
+        parser.error("informe o diretório que contém os PDFs E2E")
     pdfs = sorted(args.root.rglob("*.pdf"))
     if not pdfs:
         parser.error(f"nenhum PDF encontrado em {args.root}")
     for pdf_path in pdfs:
-        count, sheet = render_pdf(pdf_path)
+        count, sheet = render_pdf(pdf_path, dpi=args.dpi)
         print(f"{pdf_path}: {count} páginas -> {sheet}")
     return 0
 
