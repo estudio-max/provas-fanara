@@ -639,8 +639,8 @@ def test_packaged_executable_generates_both_modes_outside_source_tree(
                 [
                     str(executable), str(session), "--modo", mode, "--capa", style,
                     "--titulo", "Sessão local", "--estudio", "Estúdio Fanara",
-                    "--site", "fanara.com.br", "--semente", "77",
-                    "--qualidade", "leve", "--saida", str(output),
+                        "--site", "fanara.com.br", "--semente", "77",
+                        "--qualidade", "leve", "--saida", str(output), "--sobrescrever",
                 ],
                 cwd=tmp_path,
                 env=clean_environment,
