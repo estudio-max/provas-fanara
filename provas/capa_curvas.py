@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 
 
 _SUPERSAMPLING = 3
+_LANCZOS_FEATHER_MARGIN = 3
 MIN_ORBIT_WIDTH = 16
 MIN_ORBIT_HEIGHT = 11
 _IDENTITY_SAFE = (0.38, 0.34, 0.24, 0.30)
@@ -256,11 +257,22 @@ def render_mask(slot: CurveSlot, size: tuple[int, int]) -> Image.Image:
     points = tuple(
         (round(x * width * scale), round(y * height * scale)) for x, y in slot.path
     )
-    ImageDraw.Draw(mask).polygon(points, fill=255)
+    draw = ImageDraw.Draw(mask)
+    draw.polygon(points, fill=255)
+    site_rect = _scale_rect(_SITE_SAFE, width, height)
+    if site_rect.width > 0 and site_rect.height > 0:
+        margin = _LANCZOS_FEATHER_MARGIN * scale
+        draw.rectangle(
+            (
+                site_rect.x * scale - margin,
+                site_rect.y * scale - margin,
+                site_rect.right * scale + margin - 1,
+                site_rect.bottom * scale + margin - 1,
+            ),
+            fill=0,
+        )
     reduced = mask.resize((width, height), Image.Resampling.LANCZOS)
     clipped = Image.new("L", (width, height), 0)
     crop_box = (slot.bounds.x, slot.bounds.y, slot.bounds.right, slot.bounds.bottom)
     clipped.paste(reduced.crop(crop_box), crop_box[:2])
-    site_rect = _scale_rect(_SITE_SAFE, width, height)
-    clipped.paste(0, (site_rect.x, site_rect.y, site_rect.right, site_rect.bottom))
     return clipped

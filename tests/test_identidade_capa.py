@@ -366,6 +366,66 @@ def test_logo_contrast_is_measured_against_canvas_pixels_under_its_alpha(
     assert _contrast_ratio(rendered_color, local_background) >= 4.5
 
 
+@pytest.mark.parametrize(
+    ("source_color", "majority_background", "minority_background"),
+    [
+        ((255, 255, 255), (0, 0, 0), (255, 255, 255)),
+        ((0, 0, 0), (255, 255, 255), (0, 0, 0)),
+    ],
+)
+def test_every_nontransparent_logo_pixel_has_contrast_on_heterogeneous_canvas(
+    tmp_path,
+    source_color,
+    majority_background,
+    minority_background,
+):
+    import provas.identidade_capa as identity
+
+    layout = layout_orbita(1600, 1131, 6)
+    rect = layout.logo_rect
+    path = tmp_path / f"logo-adversarial-{source_color[0]}.png"
+    source = Image.new("RGBA", (rect.width, rect.height), (*source_color, 255))
+    source.putpixel((rect.width // 2, rect.height // 2), (*source_color, 0))
+    source.save(path)
+    source_alpha = tuple(source.getchannel("A").get_flattened_data())
+    source.close()
+    canvas = Image.new("RGB", (1600, 1131), (127, 127, 127))
+    split = rect.x + round(rect.width * 0.9)
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle(
+        (rect.x, rect.y, split - 1, rect.bottom - 1),
+        fill=majority_background,
+    )
+    draw.rectangle(
+        (split, rect.y, rect.right - 1, rect.bottom - 1),
+        fill=minority_background,
+    )
+
+    prepared, warnings = identity._prepare_logo(str(path), rect, canvas)
+
+    assert warnings == ()
+    assert prepared is not None
+    try:
+        background = canvas.crop((rect.x, rect.y, rect.right, rect.bottom))
+        prepared_pixels = tuple(prepared.get_flattened_data())
+        background_pixels = tuple(background.get_flattened_data())
+        assert tuple(pixel[3] for pixel in prepared_pixels) == source_alpha
+        assert all(
+            _contrast_ratio(pixel[:3], background_pixel) >= 4.5
+            for pixel, background_pixel in zip(prepared_pixels, background_pixels)
+            if pixel[3]
+        )
+        for pixel, background_pixel in zip(prepared_pixels, background_pixels):
+            if not pixel[3]:
+                continue
+            if _contrast_ratio(source_color, background_pixel) >= 4.5:
+                assert pixel[:3] == source_color
+            else:
+                assert pixel[:3] != source_color
+    finally:
+        prepared.close()
+
+
 def test_opaque_white_logo_background_uses_the_existing_cutout_behavior(tmp_path):
     from provas.identidade_capa import IdentityData, render_identity
 

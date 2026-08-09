@@ -57,42 +57,36 @@ def _contrast_ratio(first: float, second: float) -> float:
     return (max(first, second) + 0.05) / (min(first, second) + 0.05)
 
 
-def _logo_contrast(
+def _enforce_logo_contrast(
     logo: Image.Image,
     background: Image.Image,
-) -> tuple[float, float]:
-    weighted_luminance = 0.0
-    weighted_background_luminance = 0.0
-    alpha_total = 0
+) -> None:
+    corrected_pixels = []
+    changed = False
     for logo_pixel, background_pixel in zip(
         logo.get_flattened_data(),
         background.get_flattened_data(),
     ):
         red, green, blue, alpha = logo_pixel
         if alpha:
-            weighted_luminance += _relative_luminance((red, green, blue)) * alpha
-            weighted_background_luminance += (
-                _relative_luminance(background_pixel) * alpha
-            )
-            alpha_total += alpha
-    if not alpha_total:
-        return 1.0, 0.0
-    content_luminance = weighted_luminance / alpha_total
-    background_luminance = weighted_background_luminance / alpha_total
-    return _contrast_ratio(content_luminance, background_luminance), background_luminance
-
-
-def _monochrome_for_contrast(
-    logo: Image.Image,
-    background_luminance: float,
-) -> Image.Image:
-    dark_contrast = _contrast_ratio(0.0, background_luminance)
-    light_contrast = _contrast_ratio(1.0, background_luminance)
-    color = (0, 0, 0) if dark_contrast >= light_contrast else (255, 255, 255)
-    monochrome = Image.new("RGBA", logo.size, (*color, 255))
-    with logo.getchannel("A") as alpha:
-        monochrome.putalpha(alpha)
-    return monochrome
+            logo_luminance = _relative_luminance((red, green, blue))
+            background_luminance = _relative_luminance(background_pixel)
+            if (
+                _contrast_ratio(logo_luminance, background_luminance)
+                < _MINIMUM_LOGO_CONTRAST
+            ):
+                dark_contrast = _contrast_ratio(0.0, background_luminance)
+                light_contrast = _contrast_ratio(1.0, background_luminance)
+                color = (
+                    (0, 0, 0)
+                    if dark_contrast >= light_contrast
+                    else (255, 255, 255)
+                )
+                logo_pixel = (*color, alpha)
+                changed = True
+        corrected_pixels.append(logo_pixel)
+    if changed:
+        logo.putdata(corrected_pixels)
 
 
 def _scale_for(canvas: Image.Image) -> float:
@@ -262,14 +256,7 @@ def _prepare_logo(
         y = rect.y + (rect.height - contained.height) // 2
         with canvas.crop((x, y, x + contained.width, y + contained.height)) as crop:
             with crop.convert("RGB") as local_background:
-                contrast, background_luminance = _logo_contrast(
-                    contained,
-                    local_background,
-                )
-        if contrast < _MINIMUM_LOGO_CONTRAST:
-            monochrome = _monochrome_for_contrast(contained, background_luminance)
-            contained.close()
-            contained = monochrome
+                _enforce_logo_contrast(contained, local_background)
         return contained, ()
     except (OSError, SyntaxError, ValueError):
         return None, (CoverWarning("logo_ilegivel", _LOGO_UNREADABLE),)

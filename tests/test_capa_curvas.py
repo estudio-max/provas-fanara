@@ -59,9 +59,9 @@ def test_dense_variants_keep_the_exact_central_identity_region(count):
     assert layout_orbita(1600, 1131, count).identity_safe_rect == PixelRect(608, 385, 384, 339)
 
 
+@pytest.mark.parametrize("size", [(1600, 1131), (800, 566), (320, 226)])
 @pytest.mark.parametrize("count", range(1, 10))
-def test_every_orbit_mask_keeps_the_lower_right_site_region_empty(count):
-    size = (1600, 1131)
+def test_every_orbit_mask_keeps_the_lower_right_site_region_empty(count, size):
     layout = layout_orbita(*size, count)
     site_box = (
         layout.site_rect.x,
@@ -74,6 +74,24 @@ def test_every_orbit_mask_keeps_the_lower_right_site_region_empty(count):
         with render_mask(slot, size) as mask:
             with mask.crop(site_box) as site_pixels:
                 assert site_pixels.getbbox() is None, (count, slot.id)
+
+
+@pytest.mark.parametrize("size", [(1600, 1131), (800, 566), (320, 226)])
+def test_site_reservation_border_keeps_lanczos_antialiasing(size):
+    layout = layout_orbita(*size, 6)
+    site = layout.site_rect
+    lower_right = layout.slots[-1]
+
+    with render_mask(lower_right, size) as mask:
+        y = site.y + site.height // 2
+        border_values = [
+            mask.getpixel((x, y))
+            for x in range(site.x - 6, site.x + 1)
+        ]
+
+    assert 0 in border_values
+    assert 255 in border_values
+    assert any(0 < value < 255 for value in border_values)
 
 
 def test_orbit_variants_are_immutable_and_indexed_one_through_nine():
@@ -152,7 +170,7 @@ def test_representative_a4_geometry_snapshot():
         ("side_left", (32, 317, 528, 463), 0.7840),
         ("side_right", (1040, 317, 528, 463), 0.7839),
         ("lower_left", (48, 792, 704, 305), 0.7835),
-        ("lower_right", (848, 792, 704, 305), 0.7201),
+        ("lower_right", (848, 792, 704, 305), 0.7131),
     )
 
 
@@ -166,7 +184,7 @@ def test_nine_photo_and_smaller_proportional_geometry_snapshots():
         ("lower_left", (32, 792, 368, 305), 0.7839),
         ("lower_center_left", (424, 792, 360, 305), 0.7839),
         ("lower_center_right", (816, 792, 360, 305), 0.7840),
-        ("lower_right", (1200, 792, 368, 305), 0.6463),
+        ("lower_right", (1200, 792, 368, 305), 0.6308),
     )
     assert _snapshot(layout_orbita(800, 566, 6), (800, 566)) == (
         ("upper_left", (24, 17, 352, 153), 0.7820),
@@ -174,7 +192,7 @@ def test_nine_photo_and_smaller_proportional_geometry_snapshots():
         ("side_left", (16, 158, 264, 233), 0.7803),
         ("side_right", (520, 158, 264, 233), 0.7803),
         ("lower_left", (24, 396, 352, 153), 0.7820),
-        ("lower_right", (424, 396, 352, 153), 0.7167),
+        ("lower_right", (424, 396, 352, 153), 0.7030),
     )
 
 

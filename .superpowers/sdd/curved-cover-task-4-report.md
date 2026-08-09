@@ -134,3 +134,71 @@ exit 0
 
 O único output adicional foi o aviso de normalização LF→CRLF do Git; não houve
 erro de whitespace. Nenhuma integração com motor, UI ou fotos foi adicionada.
+
+## Anexo — correções pós-revisão R2
+
+### RED
+
+1. Contraste adversarial heterogêneo:
+
+   ```text
+   python -m pytest tests/test_identidade_capa.py::test_every_nontransparent_logo_pixel_has_contrast_on_heterogeneous_canvas -q
+   FF                                                                       [100%]
+   2 failed
+   ```
+
+   Branco sobre 90% preto/10% branco e o inverso falharam porque a média global
+   aprovava o logo inteiro, deixando os pixels sobre a faixa minoritária com
+   contraste menor que 4.5.
+
+2. Reserva antialias do site:
+
+   ```text
+   python -m pytest tests/test_capa_curvas.py::test_site_reservation_border_keeps_lanczos_antialiasing tests/test_capa_curvas.py::test_every_orbit_mask_keeps_the_lower_right_site_region_empty -q
+   FFF...........................                                           [100%]
+   3 failed, 27 passed
+   ```
+
+   Nos três tamanhos a transição era diretamente de 255 para 0, confirmando que
+   o apagamento posterior à redução criava uma borda dura. A reserva permanecia
+   vazia nas 27 combinações de 1–9 fotos e três tamanhos.
+
+### GREEN
+
+- `_enforce_logo_contrast` compara cada pixel RGBA não transparente com o pixel
+  RGB correspondente do canvas. RGB já válido é preservado; somente RGB com
+  razão menor que 4.5 é substituído por preto ou branco de maior contraste. O
+  alpha original permanece idêntico pixel a pixel.
+- A reserva de `site_rect` agora é apagada no bitmap supersampled 3×, antes do
+  LANCZOS, com margem de três pixels finais correspondente ao suporte do filtro.
+  Assim, a área final do site fica estritamente zerada e o feather permanece no
+  lado externo. Snapshots de cobertura afetados foram atualizados com os novos
+  valores determinísticos.
+
+Verificação targeted após GREEN:
+
+```text
+python -m pytest tests/test_identidade_capa.py::test_every_nontransparent_logo_pixel_has_contrast_on_heterogeneous_canvas tests/test_identidade_capa.py::test_logo_content_keeps_alpha_and_reaches_4_5_contrast tests/test_identidade_capa.py::test_logo_contrast_is_measured_against_canvas_pixels_under_its_alpha tests/test_identidade_capa.py::test_alpha_logo_preserves_transparency_and_dark_palette_converts_black_for_contrast -q
+.........                                                                [100%]
+exit 0
+
+python -m pytest tests/test_capa_curvas.py::test_site_reservation_border_keeps_lanczos_antialiasing tests/test_capa_curvas.py::test_every_orbit_mask_keeps_the_lower_right_site_region_empty -q
+..............................                                           [100%]
+exit 0
+```
+
+Verificação final solicitada:
+
+```text
+python -m pytest tests/test_identidade_capa.py tests/test_capa_curvas.py tests/test_capas_editoriais.py -q
+........................................................................ [ 77%]
+.....................                                                    [100%]
+93 testes, exit 0
+
+git diff --check
+exit 0
+```
+
+O `addopts = "-q"` do projeto, somado ao `-q` explícito, suprime a linha de
+resumo do pytest; `--collect-only` confirmou 93 testes. Nenhuma integração com
+motor ou UI foi feita. Não há preocupação funcional aberta.
