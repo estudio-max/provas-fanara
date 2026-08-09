@@ -548,11 +548,33 @@ def _publication_lock(destination: str) -> _PublicationLock:
         return holder
 
 
+def _publish_pdf(temporary: str, destination: str, overwrite: bool) -> None:
+    """Publish atomically, optionally requiring that the destination is absent."""
+    if overwrite:
+        os.replace(temporary, destination)
+        return
+    try:
+        if os.name == "nt":
+            # MoveFile on Windows is atomic and refuses an existing target.
+            os.rename(temporary, destination)
+        else:
+            # A sibling hard link provides create-if-absent semantics on POSIX.
+            os.link(temporary, destination)
+            os.unlink(temporary)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"O PDF de destino já existe: {destination}. "
+            "Escolha outro caminho ou use --sobrescrever para substituí-lo."
+        ) from exc
+
+
 def exportar(
     config: Config,
     plan: BookPlan,
     progresso=None,
     cancelar: object | None = None,
+    *,
+    sobrescrever: bool = True,
 ) -> Resultado:
     """Atomically export the exact supplied plan after save and reopen validation."""
     if _cancelled(cancelar):
@@ -590,7 +612,7 @@ def exportar(
         with publication.lock:
             if _cancelled(cancelar):
                 raise Cancelado()
-            os.replace(temporary, destination)
+            _publish_pdf(temporary, destination, sobrescrever)
     finally:
         if doc is not None:
             doc.fechar()

@@ -214,7 +214,12 @@ def main(argv: list[str] | None = None) -> int:
             config = state.config.to_motor_config()
             config.saida = args.saida
             _validar_destino_pdf(config.saida, args.sobrescrever)
-            resultado = motor.exportar(config, state.plan, progresso=progresso)
+            resultado = motor.exportar(
+                config,
+                state.plan,
+                progresso=progresso,
+                sobrescrever=args.sobrescrever,
+            )
             print(f"\nProjeto aberto: {args.abrir_projeto}")
             modo = state.plan.mode
             semente = state.plan.seed
@@ -227,7 +232,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.salvar_projeto:
                 _salvar_estado(args.salvar_projeto, config, analysis)
                 print(f"\nProjeto salvo: {args.salvar_projeto}")
-            resultado = motor.exportar(config, analysis.plan, progresso=progresso)
+            resultado = motor.exportar(
+                config,
+                analysis.plan,
+                progresso=progresso,
+                sobrescrever=args.sobrescrever,
+            )
             modo = analysis.plan.mode
             semente = analysis.plan.seed
     except (OSError, ValueError) as erro:

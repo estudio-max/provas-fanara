@@ -354,6 +354,31 @@ def test_cancellation_after_atomic_replace_returns_success(tmp_path: Path, image
 
     assert result.saida == str(output)
     assert output.exists()
+
+
+def test_non_overwrite_export_preserves_destination_created_during_render(
+    tmp_path: Path, image_factory, monkeypatch
+):
+    from provas import motor
+
+    photo = image_factory("race.jpg", size=(200, 300))
+    output = tmp_path / "race.pdf"
+    plan = BookPlan(37, "prova", (), (PagePlan(1, "single-portrait", (str(photo),), "opening"),))
+    config = motor.Config(str(tmp_path), saida=str(output), capa_mosaico=False)
+    real_validate = motor._validate_export
+    sentinel = b"CRIADO-DEPOIS-DA-CHECAGEM"
+
+    def create_racing_destination(temporary: str, expected_pages: int) -> None:
+        real_validate(temporary, expected_pages)
+        output.write_bytes(sentinel)
+
+    monkeypatch.setattr(motor, "_validate_export", create_racing_destination)
+
+    with pytest.raises(FileExistsError, match="já existe.*--sobrescrever"):
+        motor.exportar(config, plan, sobrescrever=False)
+
+    assert output.read_bytes() == sentinel
+    assert not list(tmp_path.glob("*.tmp"))
     assert not list(tmp_path.glob("*.tmp"))
 
 
