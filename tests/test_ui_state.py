@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PIL import Image
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
 
 from provas.modelos import BookPlan, PagePlan
 from provas.motor import Config, Resultado
@@ -78,6 +78,170 @@ def test_initial_actions_are_disabled_until_a_folder_is_selected(qapp, tmp_path:
     assert window.sidebar.analyze_button.isEnabled()
     assert window.folder_path == str(tmp_path)
     assert "pasta" in window.status_message.lower()
+
+
+def test_sidebar_exposes_two_cover_styles_and_accessible_identity_fields(qapp):
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+
+    assert [sidebar.cover_style.itemData(index) for index in range(sidebar.cover_style.count())] == [
+        "mosaico",
+        "curvas_editoriais",
+    ]
+    assert [sidebar.cover_style.itemText(index) for index in range(sidebar.cover_style.count())] == [
+        "Mosaico editorial",
+        "Curvas editoriais",
+    ]
+    assert sidebar.title_edit.accessibleName() == "Título da capa"
+    assert sidebar.studio_edit.accessibleName() == "Nome do fotógrafo ou estúdio"
+    assert sidebar.site_edit.accessibleName() == "Site do fotógrafo ou estúdio"
+    assert sidebar.logo_choose_button.accessibleName() == "Escolher logotipo da capa"
+    assert sidebar.logo_remove_button.accessibleName() == "Remover logotipo da capa"
+    assert all(edit.minimumHeight() >= 36 for edit in sidebar.findChildren(QLineEdit))
+
+
+def test_sidebar_cover_api_emits_style_and_debounced_identity(qapp):
+    from provas.motor import Config
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+    styles: list[str] = []
+    identities: list[dict[str, str]] = []
+    sidebar.cover_style_changed.connect(styles.append)
+    sidebar.cover_identity_changed.connect(identities.append)
+
+    sidebar.set_cover_style("curvas_editoriais", emit=True)
+    sidebar.set_cover_identity(
+        Config(".", titulo="Aurora", estudio="Estúdio Fanara", site="fanara.com.br", logo="marca.png")
+    )
+    sidebar.title_edit.setText("Aurora editorial")
+    sidebar.studio_edit.setText("Fanara")
+    sidebar.site_edit.setText("fanara.com.br/ensaios")
+
+    assert styles == ["curvas_editoriais"]
+    assert identities == []
+    deadline = time.perf_counter() + 0.5
+    while not identities and time.perf_counter() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert identities == [{
+        "titulo": "Aurora editorial",
+        "estudio": "Fanara",
+        "site": "fanara.com.br/ensaios",
+        "logo": "marca.png",
+    }]
+
+
+def test_switching_cover_style_rerenders_only_cover_and_preserves_album(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    before = window.project_state
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.set_cover_style("curvas_editoriais")
+
+    assert preview_requests == [True]
+    assert window.project_state is not None and before is not None
+    assert window.project_state.config.estilo_capa == "curvas_editoriais"
+    assert window.project_state.plan == before.plan
+    assert window.project_state.config.semente == before.config.semente
+    assert window.project_state.config.cover_ids == before.config.cover_ids
+
+
+def test_cover_identity_change_preserves_pages_seed_and_manual_cover(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    replacement = plan.pages[-1].photo_ids[-1]
+    window.replace_cover_photo(0, replacement)
+    before = window.project_state
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.set_cover_identity({
+        "titulo": "Ensaio Aurora",
+        "estudio": "Estúdio Fanara",
+        "site": "fanara.com.br",
+        "logo": "logo-inexistente.png",
+    })
+
+    assert preview_requests == [True]
+    assert window.project_state is not None and before is not None
+    assert window.project_state.plan == before.plan
+    assert window.project_state.config.semente == before.config.semente
+    assert window.project_state.config.cover_ids == before.config.cover_ids
+    assert window.project_state.config.titulo == "Ensaio Aurora"
+    assert window.project_state.config.logo == "logo-inexistente.png"
+    assert window.status_kind == "warning"
+
+
+def test_unreadable_logo_is_a_non_blocking_portuguese_warning(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.ui import MainWindow
+
+    bad_logo = tmp_path / "logo.png"
+    bad_logo.write_bytes(b"imagem invalida")
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.set_cover_identity({"logo": str(bad_logo)})
+
+    assert preview_requests == [True]
+    assert window.project_state is not None
+    assert window.project_state.config.logo == str(bad_logo)
+    assert window.status_kind == "warning"
+    assert "não pôde ser lido" in window.status_message
+
+
+def test_cover_warning_survives_preview_completion(qapp, tmp_path: Path, plan):
+    from provas.identidade_capa import CoverWarning
+    from provas.motor import PreviewResult
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    result = PreviewResult(
+        tuple(Image.new("RGB", (420, 297)) for _ in range(len(plan.pages) + 1)),
+        (CoverWarning("logo_ilegivel", "O logotipo não pôde ser lido; a capa foi criada sem ele."),),
+    )
+
+    window.apply_preview_ready(result)
+
+    assert window.export_button.isEnabled()
+    assert window.status_kind == "warning"
+    assert window.status_message == "O logotipo não pôde ser lido; a capa foi criada sem ele."
+
+
+def test_busy_state_disables_all_cover_editing_controls(qapp):
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+    sidebar.set_busy(True, "Preparando prévia")
+
+    assert all(not control.isEnabled() for control in (
+        sidebar.cover_style,
+        sidebar.title_edit,
+        sidebar.studio_edit,
+        sidebar.site_edit,
+        sidebar.logo_choose_button,
+        sidebar.logo_remove_button,
+    ))
 
 
 def test_mode_switch_updates_config_and_existing_plan_without_reanalysis(qapp, tmp_path: Path, plan):
@@ -372,8 +536,54 @@ def test_1366_by_768_at_125_percent_fits_logical_work_area(qapp):
     assert window.size().height() == logical_height
     assert window.minimumHeight() <= logical_height
     assert window.diagnostics.isHidden()
-    assert window.sidebar.cover_button.geometry().bottom() < window.sidebar.height()
+    scroll = window.sidebar.scroll_area
+    scroll.ensureWidgetVisible(window.sidebar.cover_button)
+    qapp.processEvents()
+    button_rect = window.sidebar.cover_button.rect()
+    top_left = window.sidebar.cover_button.mapTo(scroll.viewport(), button_rect.topLeft())
+    bottom_right = window.sidebar.cover_button.mapTo(scroll.viewport(), button_rect.bottomRight())
+    assert top_left.y() >= 0
+    assert bottom_right.y() < scroll.viewport().height()
     assert window.export_button.geometry().bottom() <= window.top_bar.height()
+    window.close()
+
+
+def test_sidebar_controls_remain_reachable_at_minimum_window_size(qapp):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.resize(840, 540)
+    window.show()
+    for _ in range(3):
+        qapp.processEvents()
+
+    scroll = window.sidebar.scroll_area
+    assert scroll.verticalScrollBar().maximum() > 0
+    for control in (window.sidebar.cover_style, window.sidebar.site_edit, window.sidebar.cover_button):
+        scroll.ensureWidgetVisible(control)
+        qapp.processEvents()
+        top = control.mapTo(scroll.viewport(), control.rect().topLeft()).y()
+        bottom = control.mapTo(scroll.viewport(), control.rect().bottomRight()).y()
+        assert 0 <= top < bottom < scroll.viewport().height()
+    assert window.preview_grid.width() > window.sidebar.width()
+    window.close()
+
+
+def test_scrolled_cover_section_starts_cleanly_at_logical_125_percent_size(qapp):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.resize(1093, 614)
+    window.show()
+    qapp.processEvents()
+    scroll = window.sidebar.scroll_area
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+    qapp.processEvents()
+
+    top = window.sidebar.cover_section_label.mapTo(
+        scroll.viewport(), window.sidebar.cover_section_label.rect().topLeft()
+    ).y()
+    assert 0 <= top <= 40
     window.close()
 
 

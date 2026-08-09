@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
+from PIL import Image, UnidentifiedImageError
 from PySide6.QtCore import QFile, QIODevice, QThread, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..capas import validate_cover_style
 from ..modelos import BookPlan, PhotoInfo
 from ..motor import Config, PlanAnalysisResult, Resultado
 from ..projeto import ProjectState, save_project, undo_regeneration
@@ -138,6 +140,8 @@ class MainWindow(QMainWindow):
         self.sidebar.folder_requested.connect(self.choose_folder)
         self.sidebar.analysis_requested.connect(self.request_analysis)
         self.sidebar.mode_changed.connect(self._mode_selected)
+        self.sidebar.cover_style_changed.connect(self.set_cover_style)
+        self.sidebar.cover_identity_changed.connect(self.set_cover_identity)
         self.sidebar.cover_requested.connect(self.open_cover_dialog)
         self.sidebar.cancel_requested.connect(self.cancel_active_operation)
         self.preview_grid.regenerate_requested.connect(self.request_regeneration)
@@ -172,6 +176,8 @@ class MainWindow(QMainWindow):
             paisagem=True,
             girar_horizontais=False,
         )
+        self.sidebar.set_cover_style(self._draft_config.estilo_capa, emit=False)
+        self.sidebar.set_cover_identity(self._draft_config)
         self.project_state = None
         self.previews = ()
         self._analysis_failures = ()
@@ -225,6 +231,61 @@ class MainWindow(QMainWindow):
         self.set_mode(mode)
         if had_preview and not self.is_busy:
             self.request_preview()
+
+    def set_cover_style(self, style: str) -> None:
+        """Change only the cover renderer; the editorial plan remains immutable."""
+        normalized = validate_cover_style(style)
+        self.sidebar.set_cover_style(normalized, emit=False)
+        if self._draft_config is not None:
+            self._draft_config = replace(self._draft_config, estilo_capa=normalized)
+        if self.project_state is None:
+            return
+        self.project_state = replace(
+            self.project_state,
+            config=replace(self.project_state.config, estilo_capa=normalized),
+        )
+        self.previews = ()
+        self.set_status("Estilo da capa alterado. Atualizando somente a prévia.", "idle")
+        self._sync_actions()
+        self.request_preview()
+
+    def set_cover_identity(self, identity: dict[str, str]) -> None:
+        """Update debounced cover identity without regenerating internal pages."""
+        values = {
+            key: str(identity.get(key, "")).strip()
+            for key in ("titulo", "estudio", "site", "logo")
+        }
+        if self._draft_config is not None:
+            self._draft_config = replace(self._draft_config, **values)
+        if self.project_state is None:
+            return
+        self.project_state = replace(
+            self.project_state,
+            config=replace(self.project_state.config, **values),
+        )
+        self.previews = ()
+        logo = values["logo"]
+        if logo and not Path(logo).is_file():
+            self.set_status(
+                "O logotipo não foi encontrado. A capa será criada sem ele.", "warning"
+            )
+        elif logo and not self._logo_is_readable(logo):
+            self.set_status(
+                "O logotipo não pôde ser lido. A capa será criada sem ele.", "warning"
+            )
+        else:
+            self.set_status("Identidade da capa atualizada. Preparando a prévia.", "idle")
+        self._sync_actions()
+        self.request_preview()
+
+    @staticmethod
+    def _logo_is_readable(path: str) -> bool:
+        try:
+            with Image.open(path) as image:
+                image.verify()
+        except (OSError, UnidentifiedImageError):
+            return False
+        return True
 
     def begin_operation(self, label: str, cancel_event: threading.Event | None = None) -> None:
         if self.previews:
@@ -305,6 +366,8 @@ class MainWindow(QMainWindow):
             else tuple(dict.fromkeys(photo_id for page in plan.pages for photo_id in page.photo_ids))
         )
         self.project_state = ProjectState(config, plan, paths)
+        self.sidebar.set_cover_style(config.estilo_capa, emit=False)
+        self.sidebar.set_cover_identity(config)
         self._analysis_failures = tuple(failures)
         self.sidebar.set_project_loaded(True)
         self.previews = ()
@@ -332,11 +395,15 @@ class MainWindow(QMainWindow):
     def apply_preview_ready(self, previews: object) -> None:
         if self.project_state is None:
             raise ValueError("Não há projeto para receber a prévia.")
+        warnings = tuple(getattr(previews, "warnings", ()))
         items = tuple(previews)  # type: ignore[arg-type]
         self.previews = items
         self.preview_grid.set_previews(self.project_state.plan, items)
         self._end_operation()
-        self.set_status("Prévia pronta para revisão.", "success")
+        if warnings:
+            self.set_status(str(warnings[0].message), "warning")
+        else:
+            self.set_status("Prévia pronta para revisão.", "success")
         self._sync_actions()
 
     def request_regeneration(self) -> None:

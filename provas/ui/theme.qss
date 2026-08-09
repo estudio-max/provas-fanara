@@ -19,6 +19,12 @@ QFrame#workflowSidebar, QFrame#diagnosticsPanel {
     background: #191A1F;
 }
 
+QScrollArea#sidebarScroll, QWidget#sidebarContent,
+QScrollArea#sidebarScroll > QWidget > QWidget {
+    background: #191A1F;
+    border: none;
+}
+
 QFrame#workflowSidebar {
     border-right: 1px solid #2C2D34;
 }
@@ -60,6 +66,12 @@ QLabel#sectionTitle {
     font-weight: 600;
 }
 
+QLabel#fieldLabel {
+    color: #C8C8CE;
+    font-size: 12px;
+    font-weight: 600;
+}
+
 QLabel#mutedText, QLabel#zoomLabel {
     color: #A9AAB3;
 }
@@ -87,6 +99,49 @@ QLabel#statusBanner[kind="success"] {
     color: #CDEEDF;
     background: #192C25;
     border-color: #315C4A;
+}
+
+QLabel#statusBanner[kind="warning"] {
+    color: #F4DFC1;
+    background: #30271B;
+    border-color: #70552D;
+}
+
+QLineEdit, QComboBox {
+    min-height: 36px;
+    padding: 0 10px;
+    color: #F1F1F3;
+    background: #202126;
+    border: 1px solid #3A3B43;
+    border-radius: 4px;
+    selection-background-color: #C53252;
+}
+
+QLineEdit:hover, QComboBox:hover {
+    border-color: #555661;
+}
+
+QLineEdit:focus, QComboBox:focus {
+    border: 2px solid #E04C6B;
+}
+
+QLineEdit:disabled, QComboBox:disabled {
+    color: #696A73;
+    background: #1B1C20;
+    border-color: #292A30;
+}
+
+QComboBox::drop-down {
+    width: 28px;
+    border: none;
+}
+
+QComboBox QAbstractItemView {
+    color: #F1F1F3;
+    background: #282930;
+    border: 1px solid #4A4B55;
+    selection-background-color: #492531;
+    outline: none;
 }
 
 QPushButton {

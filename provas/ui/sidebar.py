@@ -3,14 +3,19 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
+    QFileDialog,
     QFrame,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -21,6 +26,8 @@ class WorkflowSidebar(QFrame):
     analysis_requested = Signal()
     mode_changed = Signal(str)
     cover_requested = Signal()
+    cover_style_changed = Signal(str)
+    cover_identity_changed = Signal(dict)
     cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -36,7 +43,18 @@ class WorkflowSidebar(QFrame):
         return label
 
     def _build(self) -> None:
-        layout = QVBoxLayout(self)
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("sidebarScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setObjectName("sidebarContent")
+        content.setMinimumWidth(244)
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 20, 16, 16)
         layout.setSpacing(0)
 
@@ -91,8 +109,69 @@ class WorkflowSidebar(QFrame):
         self.set_mode("prova", emit=False)
 
         layout.addSpacing(24)
-        layout.addWidget(self._section_label("Capa"))
-        layout.addSpacing(8)
+        self.cover_section_label = self._section_label("Capa")
+        layout.addWidget(self.cover_section_label)
+        layout.addSpacing(12)
+        style_label = QLabel("Estilo")
+        style_label.setObjectName("fieldLabel")
+        layout.addWidget(style_label)
+        layout.addSpacing(6)
+        self.cover_style = QComboBox()
+        self.cover_style.setAccessibleName("Estilo da capa")
+        self.cover_style.addItem("Mosaico editorial", "mosaico")
+        self.cover_style.addItem("Curvas editoriais", "curvas_editoriais")
+        self.cover_style.currentIndexChanged.connect(self._emit_cover_style)
+        layout.addWidget(self.cover_style)
+
+        self.title_edit = self._identity_edit("Título", "Título da capa")
+        self.studio_edit = self._identity_edit(
+            "Fotógrafo / estúdio", "Nome do fotógrafo ou estúdio"
+        )
+        self.site_edit = self._identity_edit("Site", "Site do fotógrafo ou estúdio")
+        for label, edit in (
+            ("Título", self.title_edit),
+            ("Fotógrafo / estúdio", self.studio_edit),
+            ("Site", self.site_edit),
+        ):
+            layout.addSpacing(12)
+            field_label = QLabel(label)
+            field_label.setObjectName("fieldLabel")
+            layout.addWidget(field_label)
+            layout.addSpacing(6)
+            layout.addWidget(edit)
+
+        layout.addSpacing(12)
+        logo_label = QLabel("Logotipo")
+        logo_label.setObjectName("fieldLabel")
+        layout.addWidget(logo_label)
+        layout.addSpacing(6)
+        self.logo_path = ""
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(8)
+        self.logo_choose_button = QPushButton("Escolher…")
+        self.logo_choose_button.setAccessibleName("Escolher logotipo da capa")
+        self.logo_choose_button.clicked.connect(self._choose_logo)
+        self.logo_remove_button = QPushButton("Remover")
+        self.logo_remove_button.setAccessibleName("Remover logotipo da capa")
+        self.logo_remove_button.setEnabled(False)
+        self.logo_remove_button.clicked.connect(self._remove_logo)
+        logo_row.addWidget(self.logo_choose_button, 1)
+        logo_row.addWidget(self.logo_remove_button)
+        layout.addLayout(logo_row)
+        self.logo_name = QLabel("Nenhum logotipo")
+        self.logo_name.setObjectName("mutedText")
+        self.logo_name.setWordWrap(True)
+        layout.addSpacing(6)
+        layout.addWidget(self.logo_name)
+
+        self._identity_timer = QTimer(self)
+        self._identity_timer.setSingleShot(True)
+        self._identity_timer.setInterval(250)
+        self._identity_timer.timeout.connect(self._emit_cover_identity)
+        for edit in (self.title_edit, self.studio_edit, self.site_edit):
+            edit.textChanged.connect(lambda _text: self._identity_timer.start())
+
+        layout.addSpacing(16)
         cover_copy = QLabel("Revise a seleção automática sem alterar a ordem do álbum.")
         cover_copy.setObjectName("mutedText")
         cover_copy.setWordWrap(True)
@@ -125,6 +204,75 @@ class WorkflowSidebar(QFrame):
         progress_layout.addWidget(self.cancel_button)
         layout.addWidget(self.progress_panel)
         self.progress_panel.hide()
+        # End breathing room lets keyboard/scroll navigation align the cover group
+        # as a coherent section instead of leaving a clipped prior label above it.
+        layout.addSpacing(30)
+        self.scroll_area.setWidget(content)
+        shell.addWidget(self.scroll_area)
+
+    @staticmethod
+    def _identity_edit(placeholder: str, accessible_name: str) -> QLineEdit:
+        edit = QLineEdit()
+        edit.setPlaceholderText(placeholder)
+        edit.setAccessibleName(accessible_name)
+        edit.setMinimumHeight(36)
+        return edit
+
+    def _emit_cover_style(self) -> None:
+        self.cover_style_changed.emit(str(self.cover_style.currentData()))
+
+    def _identity_payload(self) -> dict[str, str]:
+        return {
+            "titulo": self.title_edit.text().strip(),
+            "estudio": self.studio_edit.text().strip(),
+            "site": self.site_edit.text().strip(),
+            "logo": self.logo_path,
+        }
+
+    def _emit_cover_identity(self) -> None:
+        self.cover_identity_changed.emit(self._identity_payload())
+
+    def _choose_logo(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Escolher logotipo", "", "Imagens (*.png *.jpg *.jpeg *.webp)"
+        )
+        if path:
+            self.logo_path = path
+            self.logo_name.setText(os.path.basename(path))
+            self.logo_name.setToolTip(path)
+            self.logo_remove_button.setEnabled(True)
+            self._identity_timer.start()
+
+    def _remove_logo(self) -> None:
+        self.logo_path = ""
+        self.logo_name.setText("Nenhum logotipo")
+        self.logo_name.setToolTip("")
+        self.logo_remove_button.setEnabled(False)
+        self._identity_timer.start()
+
+    def set_cover_style(self, style: str, *, emit: bool = False) -> None:
+        index = self.cover_style.findData(style)
+        if index < 0:
+            raise ValueError("Estilo de capa inválido.")
+        blocked = self.cover_style.blockSignals(True)
+        self.cover_style.setCurrentIndex(index)
+        self.cover_style.blockSignals(blocked)
+        if emit:
+            self.cover_style_changed.emit(style)
+
+    def set_cover_identity(self, config: object) -> None:
+        self._identity_timer.stop()
+        edits = (self.title_edit, self.studio_edit, self.site_edit)
+        blockers = tuple(edit.blockSignals(True) for edit in edits)
+        self.title_edit.setText(str(getattr(config, "titulo", "")))
+        self.studio_edit.setText(str(getattr(config, "estudio", "")))
+        self.site_edit.setText(str(getattr(config, "site", "")))
+        for edit, blocked in zip(edits, blockers):
+            edit.blockSignals(blocked)
+        self.logo_path = str(getattr(config, "logo", ""))
+        self.logo_name.setText(os.path.basename(self.logo_path) if self.logo_path else "Nenhum logotipo")
+        self.logo_name.setToolTip(self.logo_path)
+        self.logo_remove_button.setEnabled(bool(self.logo_path))
 
     @property
     def mode(self) -> str:
@@ -164,6 +312,15 @@ class WorkflowSidebar(QFrame):
         self.proof_radio.setEnabled(not busy)
         self.book_radio.setEnabled(not busy)
         self.cover_button.setEnabled(not busy and self.cover_button.property("ready") is True)
+        for control in (
+            self.cover_style,
+            self.title_edit,
+            self.studio_edit,
+            self.site_edit,
+            self.logo_choose_button,
+        ):
+            control.setEnabled(not busy)
+        self.logo_remove_button.setEnabled(not busy and bool(self.logo_path))
         self.cancel_button.setEnabled(busy)
         if busy and label:
             self.progress_label.setText(label)
