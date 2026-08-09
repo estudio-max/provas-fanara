@@ -419,6 +419,20 @@ def test_preview_places_cover_before_internal_page_roles(qapp, tmp_path: Path, p
     assert window.preview_grid.page_labels[0] == "Capa"
 
 
+def test_cover_preview_never_reuses_stale_pixels_for_same_plan(qapp, plan):
+    from provas.ui.preview_grid import PreviewGrid
+
+    grid = PreviewGrid()
+    internal_images = tuple(Image.new("RGB", (420, 297), "white") for _ in plan.pages)
+    first = (Image.new("RGB", (420, 297), "red"), *internal_images)
+    second = (Image.new("RGB", (420, 297), "blue"), *internal_images)
+
+    grid.set_previews(plan, first)
+    grid.set_previews(plan, second)
+
+    assert grid._images[0].pixelColor(1, 1).name() == "#0000ff"
+
+
 def test_preview_translates_generated_sequence_role(qapp, tmp_path: Path, plan):
     from provas.ui.preview_grid import PreviewGrid
 

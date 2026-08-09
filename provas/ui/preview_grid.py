@@ -279,11 +279,14 @@ class PreviewGrid(QFrame):
         self._entries = tuple(entries)
         converted: list[QImage] = []
         for page, source in zip(self._entries, sources):
-            cache_key = (plan.seed, plan.mode, page.number, page.template_id, page.photo_ids)
-            cached = self._pixmap_cache.get(cache_key)
-            image = cached if cached is not None else _to_qimage(source)
-            self._pixmap_cache[cache_key] = image
-            self._pixmap_cache.move_to_end(cache_key)
+            if page.role == "cover":
+                image = _to_qimage(source)
+            else:
+                cache_key = (plan.seed, plan.mode, page.number, page.template_id, page.photo_ids)
+                cached = self._pixmap_cache.get(cache_key)
+                image = cached if cached is not None else _to_qimage(source)
+                self._pixmap_cache[cache_key] = image
+                self._pixmap_cache.move_to_end(cache_key)
             converted.append(image)
         while len(self._pixmap_cache) > 128:
             self._pixmap_cache.popitem(last=False)
