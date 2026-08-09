@@ -12,7 +12,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PIL import Image
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
+from PySide6.QtGui import QShortcut
+from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QLineEdit
 
 from provas.modelos import BookPlan, PagePlan
 from provas.motor import Config, Resultado
@@ -78,6 +79,87 @@ def test_initial_actions_are_disabled_until_a_folder_is_selected(qapp, tmp_path:
     assert window.sidebar.analyze_button.isEnabled()
     assert window.folder_path == str(tmp_path)
     assert "pasta" in window.status_message.lower()
+
+
+def test_open_project_restores_exact_editorial_state_without_analysis(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.projeto import ProjectState, save_project
+    from provas.ui import MainWindow
+
+    previous = replace(plan, seed=plan.seed - 1)
+    manual_cover = tuple(reversed(plan.cover_photo_ids))
+    for photo_id in {photo_id for page in plan.pages for photo_id in page.photo_ids}:
+        Image.new("RGB", (300, 450), (80, 90, 100)).save(photo_id)
+    state = ProjectState(
+        Config(
+            str(tmp_path),
+            saida=str(tmp_path / "entrega.pdf"),
+            titulo="Ensaio Aurora",
+            estudio="Estúdio Fanara",
+            site="fanara.com.br",
+            logo=str(tmp_path / "marca.png"),
+            estilo_capa="curvas_editoriais",
+            modo="fotolivro",
+            marca_dagua=False,
+            mostrar_codigos=False,
+            semente=plan.seed,
+            cover_ids=manual_cover,
+        ),
+        replace(plan, mode="fotolivro", cover_photo_ids=manual_cover),
+        tuple(photo_id for page in plan.pages for photo_id in page.photo_ids),
+        ("cache-a", "cache-b"),
+        replace(previous, mode="fotolivro"),
+    )
+    project = tmp_path / "aurora.provas.json"
+    save_project(project, state)
+    window = MainWindow()
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.open_project(str(project))
+
+    assert window.project_state == state
+    assert window._draft_config == state.config.to_motor_config()
+    assert window.folder_path == str(tmp_path)
+    assert window.mode == "fotolivro"
+    assert window.sidebar.cover_style.currentData() == "curvas_editoriais"
+    assert window.sidebar.title_edit.text() == "Ensaio Aurora"
+    assert window.sidebar.studio_edit.text() == "Estúdio Fanara"
+    assert window.sidebar.site_edit.text() == "fanara.com.br"
+    assert window.sidebar.logo_path == str(tmp_path / "marca.png")
+    assert window.diagnostics.pages_value.text() == str(len(plan.pages))
+    assert preview_requests == [True]
+    assert window.status_kind == "success"
+    assert "aberto" in window.status_message.lower()
+
+
+def test_open_project_dialog_is_accessible_and_uses_project_file_filter(
+    qapp, tmp_path: Path, monkeypatch
+):
+    from provas.projeto import ProjectState, save_project
+    from provas.ui import MainWindow
+
+    photo = str(tmp_path / "foto.jpg")
+    plan = BookPlan(3, "prova", (photo,), (PagePlan(1, "single-portrait", (photo,), "opening"),))
+    project = tmp_path / "sessao.provas.json"
+    save_project(project, ProjectState(Config(str(tmp_path)), plan, (photo,)))
+    window = MainWindow()
+    captured: list[tuple[str, str]] = []
+
+    def choose(_parent, title, _default, file_filter):
+        captured.append((title, file_filter))
+        return str(project), file_filter
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", choose)
+    monkeypatch.setattr(window, "request_preview", lambda: None)
+
+    window.open_project_button.click()
+
+    assert captured == [("Abrir projeto", "Projeto Fotolivro (*.provas.json);;JSON (*.json)")]
+    assert window.open_project_button.accessibleName() == "Abrir projeto Fotolivro"
+    assert "Ctrl+O" in {shortcut.key().toString() for shortcut in window.findChildren(QShortcut)}
+    assert window.project_state is not None
 
 
 def test_sidebar_exposes_two_cover_styles_and_accessible_identity_fields(qapp):
@@ -659,7 +741,8 @@ def test_minimum_geometry_keeps_preview_and_export_clear_with_long_status(qapp):
     assert window.size().width() == 860
     assert window.diagnostics.isHidden()
     assert window.preview_grid.width() >= 560
-    assert window.status_label.geometry().right() < window.save_button.geometry().left()
+    assert window.status_label.geometry().right() < window.open_project_button.geometry().left()
+    assert window.open_project_button.geometry().right() < window.save_button.geometry().left()
     assert window.save_button.geometry().right() < window.export_button.geometry().left()
     assert window.export_button.geometry().right() <= window.top_bar.contentsRect().right()
     assert window.export_button.height() >= 44

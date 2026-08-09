@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from ..capas import validate_cover_style
 from ..modelos import BookPlan, PhotoInfo
 from ..motor import Config, PlanAnalysisResult, Resultado
-from ..projeto import ProjectState, save_project, undo_regeneration
+from ..projeto import ProjectSchemaError, ProjectState, load_project, save_project, undo_regeneration
 from .cover_dialog import CoverDialog
 from .diagnostics import DiagnosticsPanel
 from .preview_grid import PreviewGrid
@@ -106,6 +106,10 @@ class MainWindow(QMainWindow):
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         top.addWidget(self.status_label, 1)
 
+        self.open_project_button = QPushButton("Abrir projeto")
+        self.open_project_button.setAccessibleName("Abrir projeto Fotolivro")
+        self.open_project_button.setToolTip("Abrir um projeto salvo (Ctrl+O)")
+        self.open_project_button.setFixedWidth(112)
         self.save_button = QPushButton("Salvar projeto")
         self.save_button.setFixedWidth(116)
         self.save_button.setEnabled(False)
@@ -113,6 +117,7 @@ class MainWindow(QMainWindow):
         self.export_button.setObjectName("primaryButton")
         self.export_button.setFixedWidth(112)
         self.export_button.setEnabled(False)
+        top.addWidget(self.open_project_button)
         top.addWidget(self.save_button)
         top.addWidget(self.export_button)
         root.addWidget(self.top_bar)
@@ -131,7 +136,8 @@ class MainWindow(QMainWindow):
         root.addWidget(desk, 1)
         self.setCentralWidget(central)
 
-        QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_folder)
+        QShortcut(QKeySequence("Ctrl+O"), self, activated=self.open_project_dialog)
+        QShortcut(QKeySequence("Ctrl+Shift+O"), self, activated=self.choose_folder)
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_project_dialog)
         QShortcut(QKeySequence("Ctrl+E"), self, activated=self.export_dialog)
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.undo_regeneration)
@@ -146,6 +152,7 @@ class MainWindow(QMainWindow):
         self.sidebar.cancel_requested.connect(self.cancel_active_operation)
         self.preview_grid.regenerate_requested.connect(self.request_regeneration)
         self.preview_grid.undo_requested.connect(self.undo_regeneration)
+        self.open_project_button.clicked.connect(self.open_project_dialog)
         self.save_button.clicked.connect(self.save_project_dialog)
         self.export_button.clicked.connect(self.export_dialog)
 
@@ -160,6 +167,61 @@ class MainWindow(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Escolher pasta de fotografias")
         if path:
             self.select_folder(path)
+
+    def open_project_dialog(self) -> None:
+        """Choose and restore a project without composing a replacement plan."""
+        if self.is_busy:
+            return
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Abrir projeto",
+            self.folder_path,
+            "Projeto Fotolivro (*.provas.json);;JSON (*.json)",
+        )
+        if path:
+            self.open_project(path)
+
+    def open_project(self, path: str) -> None:
+        """Restore persisted UI and plan state, then render that exact plan."""
+        if self.is_busy:
+            return
+        try:
+            state = load_project(path)
+        except (OSError, ProjectSchemaError, ValueError) as exc:
+            self.apply_failure(str(exc))
+            return
+
+        self.project_state = state
+        self._draft_config = state.config.to_motor_config()
+        self.folder_path = os.path.abspath(state.config.pasta)
+        self.previews = ()
+        self.last_export_path = ""
+        missing = state.missing_paths
+        self._analysis_failures = tuple(
+            (os.path.basename(source) or source, "arquivo de origem ausente")
+            for source in missing
+        )
+
+        self.project_label.setText(Path(path).name.removesuffix(".provas.json"))
+        self.sidebar.set_folder(self.folder_path)
+        self.sidebar.set_project_loaded(True)
+        self.sidebar.set_mode(state.config.modo, emit=False)
+        self.sidebar.set_cover_style(state.config.estilo_capa, emit=False)
+        self.sidebar.set_cover_identity(state.config)
+        self.preview_grid.show_empty("Carregando a prévia do projeto salvo…")
+        self.diagnostics.set_plan(
+            state.plan,
+            failed_count=len(missing),
+            failures=self._analysis_failures,
+        )
+        if missing:
+            self.set_status(
+                "Projeto aberto, mas há fotografias de origem ausentes.", "warning"
+            )
+        else:
+            self.set_status("Projeto aberto. Preparando a prévia salva.", "success")
+        self._sync_actions()
+        self.request_preview()
 
     def select_folder(self, path: str) -> None:
         """Select a source folder and reset only state derived from the previous one."""
@@ -608,6 +670,7 @@ class MainWindow(QMainWindow):
         has_folder = bool(self.folder_path)
         has_plan = self.project_state is not None
         preview_ready = has_plan and bool(self.previews)
+        self.open_project_button.setEnabled(not self.is_busy)
         self.sidebar.analyze_button.setEnabled(has_folder and not self.is_busy)
         self.sidebar.set_cover_ready(bool(preview_ready))
         self.preview_grid.regenerate_button.setEnabled(bool(preview_ready and not self.is_busy))
