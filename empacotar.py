@@ -76,6 +76,8 @@ def dados_pyinstaller() -> list[str]:
 
 def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
     """Return actionable packaging contract violations without extracting data."""
+    from PIL import Image
+
     obrigatorios = (
         "Fotolivro/Fotolivro.exe",
         "Fotolivro/BUILD-MANIFEST.json",
@@ -97,8 +99,8 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         if not any(presente(name) for name in minusculos):
             problemas.append(f"ativo obrigatório ausente: {rotulo}")
     proibidos = {"config.json", "logo.png"}
-    extensoes_de_imagem = {
-        ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".heic",
+    Image.init()
+    extensoes_de_imagem = set(Image.registered_extensions()) | {
         ".nef", ".cr2", ".arw", ".dng", ".orf", ".rw2",
     }
     for name in minusculos:
