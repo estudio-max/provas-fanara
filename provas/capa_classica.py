@@ -22,8 +22,11 @@ _DESIGN_SIZE = (1600, 1131)
 _TITLE_MAX_PT = 34
 _TITLE_MIN_PT = 22
 _STUDIO_PT = 10
-_STUDIO_TRACKING_PT = 3
+_STUDIO_TRACKING_EM = 0.26
 _OVERFLOW_MESSAGE = "O título da capa não cabe. Abrevie o título antes de exportar."
+_STUDIO_OVERFLOW_MESSAGE = (
+    "O nome do estúdio não cabe. Abrevie o estúdio antes de exportar."
+)
 
 BODONI_PATH = str(
     Path(__file__).resolve().parents[1] / "assets" / "fonts" / "BodoniModa[opsz,wght].ttf"
@@ -164,13 +167,28 @@ def _fit_title(title: str, available_width: int, scale: float):
 def _studio_font(size: int):
     try:
         return ImageFont.truetype(_SEGOE_UI_LIGHT_PATH, size)
-    except OSError:
-        return ImageFont.truetype(BODONI_PATH, size)
+    except OSError as error:
+        raise RuntimeError(
+            "A fonte Segoe UI Light não está disponível. Instale-a antes de exportar."
+        ) from error
 
 
-def _tracking_width(draw: ImageDraw.ImageDraw, text: str, font, tracking: int) -> float:
+def _studio_tracking(font) -> float:
+    return float(font.size) * _STUDIO_TRACKING_EM
+
+
+def _tracking_width(draw: ImageDraw.ImageDraw, text: str, font, tracking: float) -> float:
     glyphs = [draw.textlength(character, font=font) for character in text]
     return sum(glyphs) + max(0, len(glyphs) - 1) * tracking
+
+
+def _fit_studio(text: str, available_width: int, scale: float):
+    font = _studio_font(max(1, round(_STUDIO_PT * scale)))
+    tracking = _studio_tracking(font)
+    with Image.new("L", (1, 1), 0) as measure:
+        if _tracking_width(ImageDraw.Draw(measure), text, font, tracking) > available_width:
+            raise CoverTextOverflow(_STUDIO_OVERFLOW_MESSAGE)
+    return font, tracking
 
 
 def _draw_centered_text(
@@ -194,7 +212,7 @@ def _draw_tracked_studio(
     rect: _ClassicRect,
     text: str,
     font,
-    tracking: int,
+    tracking: float,
 ) -> None:
     total_width = _tracking_width(draw, text, font, tracking)
     bounds = draw.textbbox((0, 0), text or " ", font=font)
@@ -232,8 +250,7 @@ def render_classic_cover(
     layout = layout_classico(width, height)
     scale = _scale_for(width, height)
     title_font, title_bounds = _fit_title(title, layout.title.width, scale)
-    studio_font = _studio_font(max(1, round(_STUDIO_PT * scale)))
-    tracking = max(0, round(_STUDIO_TRACKING_PT * scale))
+    studio_font, tracking = _fit_studio(studio, layout.studio.width, scale)
 
     if not isinstance(photo, CoverPhoto) or not isinstance(photo.image, Image.Image):
         raise ValueError("Forneça uma fotografia de capa válida.")

@@ -4,8 +4,9 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
+import provas.capa_classica as classic
 from provas.capa_classica import (
     BODONI_PATH,
     CoverTextOverflow,
@@ -172,3 +173,67 @@ def test_overlong_title_fails_atomically_before_detection(photo, monkeypatch):
     assert detection_called is False
     assert photo.image.getpixel((0, 0)) == (40, 90, 140)
     photo.image.close()
+
+
+def test_overlong_studio_fails_atomically_before_detection_or_rgb_canvas(photo, monkeypatch):
+    detection_called = False
+    rgb_canvas_created = False
+    original_new = Image.new
+
+    def detector(_image):
+        nonlocal detection_called
+        detection_called = True
+        return ()
+
+    def observed_new(mode, size, *args, **kwargs):
+        nonlocal rgb_canvas_created
+        if mode == "RGB" and size == (1600, 1131):
+            rgb_canvas_created = True
+        return original_new(mode, size, *args, **kwargs)
+
+    monkeypatch.setattr("provas.capa_classica.enquadramento.detect_faces", detector)
+    monkeypatch.setattr("provas.capa_classica.Image.new", observed_new)
+
+    with pytest.raises(CoverTextOverflow, match="Abrevie o estúdio"):
+        render_classic_cover(photo, 1600, 1131, "AVENTURAS", "W" * 300, ClassicCrop())
+
+    assert detection_called is False
+    assert rgb_canvas_created is False
+    assert photo.image.getpixel((0, 0)) == (40, 90, 140)
+    photo.image.close()
+
+
+def test_missing_segoe_ui_light_fails_in_portuguese_before_detection(photo, monkeypatch):
+    def unexpected(_image):
+        raise AssertionError("missing font must fail before face detection")
+
+    monkeypatch.setattr("provas.capa_classica._SEGOE_UI_LIGHT_PATH", "fonte-ausente.ttf")
+    monkeypatch.setattr("provas.capa_classica.enquadramento.detect_faces", unexpected)
+
+    try:
+        with pytest.raises(RuntimeError, match="Segoe UI Light não está disponível"):
+            render_classic_cover(
+                photo,
+                1600,
+                1131,
+                "AVENTURAS",
+                "ESTÚDIO",
+                ClassicCrop(),
+            )
+    finally:
+        photo.image.close()
+
+
+def test_studio_tracking_is_exactly_point_two_six_em_with_subpixel_width():
+    text = "ESTÚDIO"
+    font = classic._studio_font(10)
+    tracking = classic._studio_tracking(font)
+
+    with Image.new("L", (1, 1), 0) as measure:
+        draw = ImageDraw.Draw(measure)
+        glyph_width = sum(draw.textlength(character, font=font) for character in text)
+        expected = glyph_width + (len(text) - 1) * 2.6
+        actual = classic._tracking_width(draw, text, font, tracking)
+
+    assert tracking == pytest.approx(2.6, abs=1e-12)
+    assert actual == pytest.approx(expected, abs=1e-6)
