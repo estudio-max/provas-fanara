@@ -246,11 +246,20 @@ def _prepare_render_assets(
     logo_path = config.logo.strip()
     if plan.mode == "prova" and config.marca_dagua and config.marca_opacidade > 0:
         if logo_path and os.path.exists(logo_path):
-            logo = imagens.carregar_logo(logo_path)
+            logo: Image.Image | None = None
             try:
+                logo = imagens.carregar_logo(logo_path)
                 watermark = imagens.logo_branco(logo)
+            except (OSError, SyntaxError, ValueError):
+                fallback = (
+                    f"{config.estudio} · PROVA"
+                    if config.estudio.strip()
+                    else "PROVA PARA SELEÇÃO"
+                )
+                watermark = imagens.marca_textual(fallback)
             finally:
-                logo.close()
+                if logo is not None:
+                    logo.close()
         else:
             fallback = f"{config.estudio} · PROVA" if config.estudio.strip() else "PROVA PARA SELEÇÃO"
             watermark = imagens.marca_textual(fallback)
@@ -379,7 +388,9 @@ def gerar_preview(
     config = config.com_padroes()
     assets, analysis = _prepare_render_assets(config, plan, progresso, cancelar)
     thumbnails = []
-    cover_warnings: tuple[CoverWarning, ...] = ()
+    # Surface the shared logo preflight even when the project intentionally has
+    # no cover; the document renderer owns and closes every decoded logo.
+    cover_warnings = _logo_document(config)[3]
     if config.capa_mosaico and plan.cover_photo_ids:
         _avisar(progresso, 0, max(1, len(plan.pages) + 1), "Renderizando capa…", cancelar)
         cover_document = _new_editorial_document(config, plan.mode)
@@ -552,11 +563,15 @@ def exportar(
     temporary = _new_sibling_temp(destination)
     doc: documento.Documento | None = None
     cover_rendered: tuple[CoverWarning, ...] | None = None
+    cover_created = False
     try:
         doc = _new_editorial_document(config, plan.mode)
         cover_rendered = _render_cover(
             doc, config, plan, {photo.id: photo for photo in analysis.photos},
         )
+        cover_created = cover_rendered is not None
+        if cover_rendered is None:
+            cover_rendered = tuple(getattr(doc, "cover_warnings", ()))
         templates = {template.id: template for template in catalog()}
         total = len(plan.pages)
         for index, page_plan in enumerate(plan.pages, start=1):
@@ -568,7 +583,7 @@ def exportar(
             doc.render_page(page_plan, template, assets)
             _avisar(progresso, index, max(1, total), f"Diagramando… página {index}/{total}", cancelar)
         doc.salvar(temporary)
-        _validate_export(temporary, len(plan.pages) + int(cover_rendered is not None))
+        _validate_export(temporary, len(plan.pages) + int(cover_created))
         if _cancelled(cancelar):
             raise Cancelado()
         publication = _publication_lock(destination)

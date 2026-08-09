@@ -195,6 +195,40 @@ def test_proof_without_external_logo_uses_discreet_text_watermark(tmp_path: Path
         assert changed > marked.width * marked.height * 0.01
 
 
+@pytest.mark.parametrize("with_cover", [True, False])
+def test_corrupt_proof_logo_uses_text_watermark_and_warns_once_in_preview_and_export(
+    tmp_path: Path, image_factory, with_cover: bool
+):
+    from provas import motor
+
+    photo = image_factory("retrato.jpg", size=(300, 450), color=(70, 70, 70))
+    corrupt_logo = tmp_path / "logo-corrompido.png"
+    corrupt_logo.write_bytes(b"isto nao e uma imagem")
+    page = PagePlan(1, "single-portrait", (str(photo),), "opening")
+    plan = BookPlan(17, "prova", (str(photo),), (page,))
+    output = tmp_path / "prova.pdf"
+    config = motor.Config(
+        str(tmp_path),
+        saida=str(output),
+        titulo="Retratos",
+        logo=str(corrupt_logo),
+        estudio="Estúdio Fanara",
+        modo="prova",
+        estilo_capa="curvas_editoriais",
+        capa_mosaico=with_cover,
+    )
+
+    preview = motor.gerar_preview(config, plan, width=320)
+    result = motor.exportar(config, plan)
+
+    expected = "O logotipo não pôde ser lido; a capa foi criada sem ele."
+    assert [warning.message for warning in preview.warnings] == [expected]
+    assert [warning.message for warning in result.warnings] == [expected]
+    assert output.exists()
+    for image in preview:
+        image.close()
+
+
 def test_textual_watermark_uses_ascii_fallback_when_no_unicode_font_is_available(monkeypatch):
     from provas import imagens
 
