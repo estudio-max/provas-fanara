@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import subprocess
 import sys
 
 import pymupdf
 import pytest
+from PIL import Image
 
 
 ROOT = Path(__file__).parents[1]
@@ -148,6 +150,50 @@ def test_cli_ajuda_curta_e_uso_nao_expoem_texto_ingles():
     assert "mostra esta ajuda e encerra" in result.stdout.lower()
     assert "usage:" not in result.stdout.lower()
     assert "show this help message" not in result.stdout.lower()
+
+
+def test_cli_aceita_capa_curva_com_identidade_completa(tmp_path: Path, image_factory):
+    for indice in range(6):
+        image_factory(f"retrato-{indice}.jpg", size=(300, 450))
+    logo = tmp_path / "marca.png"
+    Image.new("RGBA", (180, 60), (255, 255, 255, 255)).save(logo)
+    saida = tmp_path / "curvas.pdf"
+    projeto = tmp_path / "curvas.provas.json"
+
+    result = executar(
+        str(tmp_path), "--modo", "fotolivro", "--capa", "curvas_editoriais",
+        "--titulo", "Sessão Aurora", "--estudio", "Estúdio Fanara",
+        "--site", "fanara.com.br", "--logo", str(logo), "--saida", str(saida),
+        "--salvar-projeto", str(projeto),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert saida.exists()
+    payload = json.loads(projeto.read_text(encoding="utf-8"))
+    esperado = {
+        "estilo_capa": "curvas_editoriais", "titulo": "Sessão Aurora",
+        "estudio": "Estúdio Fanara", "site": "fanara.com.br", "logo": str(logo),
+    }
+    assert {chave: payload["config"][chave] for chave in esperado} == esperado
+
+
+def test_cli_documenta_apenas_os_dois_estilos_de_capa_suportados():
+    result = executar("--help")
+
+    assert result.returncode == 0
+    assert "--capa {mosaico,curvas_editoriais}" in result.stdout
+    assert "losango" not in result.stdout
+    assert "destaque" not in result.stdout
+
+
+def test_readme_documenta_privacidade_migracao_logo_e_comandos_dos_dois_estilos():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "A detecção de rosto é executada localmente; nenhuma fotografia é enviada pela internet" in readme
+    assert "Projetos v1 abrem como mosaico" in readme
+    assert "Logotipo inválido é ignorado com aviso" in readme
+    assert "--modo prova --capa mosaico" in readme
+    assert "--modo fotolivro --capa curvas_editoriais" in readme
 
 
 def test_verificador_lista_dependencias_editoriais_e_permissao_de_escrita():

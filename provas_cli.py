@@ -120,7 +120,10 @@ def criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--site", default="", help="endereço mostrado no rodapé")
     parser.add_argument("--fundo", default=tema.FUNDO_PADRAO, help="cor de fundo, ex.: #16161A")
     parser.add_argument("--opacidade", type=float, default=0.20, help="força da marca d'água")
-    parser.add_argument("--capa", type=estilo_capa, metavar="{mosaico,losango,destaque}", default="mosaico")
+    parser.add_argument(
+        "--capa", type=estilo_capa, metavar="{mosaico,curvas_editoriais}",
+        default="mosaico", help="estilo da capa: mosaico ou curvas editoriais",
+    )
     parser.add_argument("--sem-capa", action="store_true")
     parser.add_argument("--modo", type=modo_editorial, metavar="{prova,fotolivro}", default="prova",
                         help="prova com marca e códigos, ou fotolivro limpo")

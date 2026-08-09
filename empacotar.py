@@ -14,6 +14,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 NOME = "Fotolivro"
@@ -39,6 +40,8 @@ lente. RAW e JPG de mesmo nome representam uma única foto.
 PRIVACIDADE
 O pacote não contém suas preferências locais nem logotipo. Projetos .provas.json
 não guardam cópias das fotografias.
+A detecção de rosto é executada localmente; nenhuma fotografia é enviada pela
+internet.
 
 AVISO DO WINDOWS
 Por ser um programa sem assinatura digital paga, pode aparecer "O Windows
@@ -48,17 +51,59 @@ assim mesmo".
 
 
 def dados_pyinstaller() -> list[str]:
-    """Bundle the application stylesheet and the required Windows Qt plugin."""
+    """Bundle UI and the minimal local face-detector runtime."""
+    import cv2
     from PySide6 import __file__ as pyside_package
 
     theme = os.path.join(RAIZ, "provas", "ui", "theme.qss")
     platform_plugin = os.path.join(
         os.path.dirname(pyside_package), "plugins", "platforms", "qwindows.dll",
     )
+    cascade = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    if not os.path.isfile(cascade):
+        raise FileNotFoundError(f"Cascade Haar local não encontrado: {cascade}")
     return [
         "--add-data", f"{theme}{os.pathsep}provas/ui",
         "--add-binary", f"{platform_plugin}{os.pathsep}PySide6/plugins/platforms",
+        "--add-data", f"{cascade}{os.pathsep}cv2/data",
+        "--hidden-import", "cv2",
+        "--hidden-import", "numpy",
+        # O detector usa apenas cvtColor/CascadeClassifier. O código Python
+        # opcional de Graph API é carregado dinamicamente e pode ser omitido.
+        "--exclude-module", "cv2.gapi",
     ]
+
+
+def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
+    """Return actionable packaging contract violations without extracting data."""
+    obrigatorios = (
+        "Fotolivro/Fotolivro.exe",
+        "Fotolivro/BUILD-MANIFEST.json",
+        "Fotolivro/LEIA-ME.txt",
+    )
+    problemas: list[str] = []
+    with zipfile.ZipFile(pacote) as archive:
+        nomes = tuple(name.replace("\\", "/") for name in archive.namelist())
+    minusculos = tuple(name.lower() for name in nomes)
+    for obrigatorio in obrigatorios:
+        if obrigatorio.lower() not in minusculos:
+            problemas.append(f"arquivo obrigatório ausente: {obrigatorio}")
+    ativos = {
+        "QSS": lambda name: name.endswith("/provas/ui/theme.qss"),
+        "qwindows": lambda name: name.endswith("/pyside6/plugins/platforms/qwindows.dll"),
+        "cascade Haar": lambda name: name.endswith("/cv2/data/haarcascade_frontalface_default.xml"),
+    }
+    for rotulo, presente in ativos.items():
+        if not any(presente(name) for name in minusculos):
+            problemas.append(f"ativo obrigatório ausente: {rotulo}")
+    proibidos = {"config.json", "logo.png"}
+    extensoes_fotograficas = {".jpg", ".jpeg", ".nef", ".cr2", ".arw", ".dng", ".orf", ".rw2"}
+    for name in minusculos:
+        if Path(name).name in proibidos:
+            problemas.append(f"dado de usuário incluído: {name}")
+        elif Path(name).suffix in extensoes_fotograficas:
+            problemas.append(f"fotografia incluída no pacote: {name}")
+    return tuple(problemas)
 
 
 def remover_dados_usuario(pasta: str) -> None:
@@ -167,7 +212,7 @@ def main() -> int:
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", NOME,
         "--distpath", os.path.join(RAIZ, "dist"), "--workpath", os.path.join(RAIZ, "build"),
         "--specpath", os.path.join(RAIZ, "build"), "--paths", RAIZ,
-        "--exclude-module", "numpy", "--exclude-module", "matplotlib", "--exclude-module", "scipy",
+        "--exclude-module", "matplotlib", "--exclude-module", "scipy",
         "--exclude-module", "pandas", "--exclude-module", "PIL.ImageQt", "--exclude-module", "PyQt5",
         "--exclude-module", "PySide2", "--exclude-module", "test",
         *dados_pyinstaller(),
@@ -193,6 +238,12 @@ def main() -> int:
     with open(leiame, "w", encoding="utf-8") as arquivo:
         arquivo.write(LEIAME_WINDOWS)
     pacote = compactar(alvo, os.path.join(RAIZ, "dist", f"{NOME}-Windows.zip"))
+    problemas = inspecionar_pacote(pacote)
+    if problemas:
+        print("\nO pacote falhou na inspeção:")
+        for problema in problemas:
+            print(f"  - {problema}")
+        return 1
     print(f"\nAplicativo: {alvo}")
     print(f"Enviar:     {pacote}  ({os.path.getsize(pacote) / 1e6:.0f} MB)")
     return 0

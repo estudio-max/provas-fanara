@@ -286,50 +286,55 @@ def test_packaged_executable_generates_both_modes_outside_source_tree(
     outputs = {}
     package_qa = VISUAL_QA / "packaged"
     package_qa.mkdir(parents=True, exist_ok=True)
-    for mode in ("prova", "fotolivro"):
-        output = package_qa / f"{mode}.pdf"
-        completed = subprocess.run(
-            [
-                str(executable), str(session), "--modo", mode, "--semente", "77",
-                "--qualidade", "leve", "--saida", str(output),
-            ],
-            cwd=tmp_path,
-            env=clean_environment,
-            capture_output=True,
-            timeout=90,
-            check=False,
-        )
-        assert completed.returncode == 0
-        assert output.is_file()
-        outputs[mode] = output
-        with pymupdf.open(output) as pdf:
-            assert pdf.page_count >= 2
-            assert all(
-                (page.rect.width, page.rect.height) == pytest.approx(A4_LANDSCAPE, abs=0.2)
-                for page in pdf
+    for style in ("mosaico", "curvas_editoriais"):
+        for mode in ("prova", "fotolivro"):
+            output = package_qa / f"{style}-{mode}.pdf"
+            completed = subprocess.run(
+                [
+                    str(executable), str(session), "--modo", mode, "--capa", style,
+                    "--titulo", "Sessão local", "--estudio", "Estúdio Fanara",
+                    "--site", "fanara.com.br", "--semente", "77",
+                    "--qualidade", "leve", "--saida", str(output),
+                ],
+                cwd=tmp_path,
+                env=clean_environment,
+                capture_output=True,
+                timeout=90,
+                check=False,
             )
+            assert completed.returncode == 0
+            assert output.is_file()
+            outputs[(style, mode)] = output
+            with pymupdf.open(output) as pdf:
+                assert pdf.page_count >= 2
+                assert all(
+                    (page.rect.width, page.rect.height) == pytest.approx(A4_LANDSCAPE, abs=0.2)
+                    for page in pdf
+                )
 
     local = motor.analisar_plano(motor.Config(str(session), modo="fotolivro", semente=77))
     by_id = {photo.id: photo for photo in local.photos}
-    with pymupdf.open(outputs["prova"]) as proof_pdf, pymupdf.open(outputs["fotolivro"]) as clean_pdf:
-        assert proof_pdf.page_count == clean_pdf.page_count == len(local.plan.pages) + 1
-        for page_index, page_plan in enumerate(local.plan.pages, start=1):
-            proof_images = _pdf_images(proof_pdf, page_index)
-            clean_images = _pdf_images(clean_pdf, page_index)
-            try:
-                assert len(proof_images) == len(clean_images) == len(page_plan.photo_ids)
-                for proof, clean, photo_id in zip(proof_images, clean_images, page_plan.photo_ids):
-                    with Image.open(by_id[photo_id].path) as source:
-                        _assert_mode_rendering(source, proof, clean)
-                proof_text = proof_pdf[page_index].get_text()
-                clean_text = clean_pdf[page_index].get_text()
-                for photo_id in page_plan.photo_ids:
-                    prefix = Path(photo_id).stem[:10]
-                    assert prefix in proof_text
-                    assert prefix not in clean_text
-            finally:
-                for image in (*proof_images, *clean_images):
-                    image.close()
+    for style in ("mosaico", "curvas_editoriais"):
+        with pymupdf.open(outputs[(style, "prova")]) as proof_pdf, \
+                pymupdf.open(outputs[(style, "fotolivro")]) as clean_pdf:
+            assert proof_pdf.page_count == clean_pdf.page_count == len(local.plan.pages) + 1
+            for page_index, page_plan in enumerate(local.plan.pages, start=1):
+                proof_images = _pdf_images(proof_pdf, page_index)
+                clean_images = _pdf_images(clean_pdf, page_index)
+                try:
+                    assert len(proof_images) == len(clean_images) == len(page_plan.photo_ids)
+                    for proof, clean, photo_id in zip(proof_images, clean_images, page_plan.photo_ids):
+                        with Image.open(by_id[photo_id].path) as source:
+                            _assert_mode_rendering(source, proof, clean)
+                    proof_text = proof_pdf[page_index].get_text()
+                    clean_text = clean_pdf[page_index].get_text()
+                    for photo_id in page_plan.photo_ids:
+                        prefix = Path(photo_id).stem[:10]
+                        assert prefix in proof_text
+                        assert prefix not in clean_text
+                finally:
+                    for image in (*proof_images, *clean_images):
+                        image.close()
 
 
 def test_visual_baselines_document_the_approved_cases_and_seeds():

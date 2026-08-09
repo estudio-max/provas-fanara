@@ -57,13 +57,16 @@ caminhos das fotos; não contém fotos, miniaturas ou logotipos. Mantenha as
 fotografias na pasta original para reabrir e exportar o projeto. O pacote
 Windows exclui `config.json` e `logo.png` locais.
 
+A detecção de rosto é executada localmente; nenhuma fotografia é enviada pela internet.
+Projetos v1 abrem como mosaico. Logotipo inválido é ignorado com aviso.
+
 ## Linha de comando
 
 Para automação, gere um plano novo ou reexporte um salvo:
 
 ```powershell
-python provas_cli.py "C:\ensaios\Bianca" --modo prova --semente 42 --amostra
-python provas_cli.py "C:\ensaios\Bianca" --modo fotolivro --salvar-projeto "C:\ensaios\Bianca.provas.json"
+python provas_cli.py "C:\ensaios\Bianca" --modo prova --capa mosaico --titulo "Seleção Bianca" --saida "C:\entregas\Bianca-prova.pdf"
+python provas_cli.py "C:\ensaios\Bianca" --modo fotolivro --capa curvas_editoriais --titulo "Bianca" --estudio "Estúdio Fanara" --site "fanara.com.br" --logo "C:\marcas\fanara.png" --salvar-projeto "C:\ensaios\Bianca.provas.json" --saida "C:\entregas\Bianca-fotolivro.pdf"
 python provas_cli.py --abrir-projeto "C:\ensaios\Bianca.provas.json" --saida "C:\entregas\Bianca.pdf"
 ```
 
@@ -87,6 +90,7 @@ python empacotar.py
 ```
 
 O comando, executado no Windows, gera `dist/Fotolivro-Windows.zip` com
-`Fotolivro.exe`, o QSS, ícone, plugin de plataforma PySide6 e `LEIA-ME.txt`.
+`Fotolivro.exe`, o QSS, ícone, plugin de plataforma PySide6, NumPy, OpenCV,
+o cascade facial local, `BUILD-MANIFEST.json` e `LEIA-ME.txt`.
 Como o executável não tem assinatura digital, o Windows pode pedir confirmação
 na primeira abertura.
