@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import math
+from hashlib import sha256
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw
 
 from . import imagens, tema
-from .identidade_capa import CoverWarning
+from .capa_curvas import layout_orbita, render_mask
+from .enquadramento import frame_for_mask
+from .identidade_capa import CoverWarning, IdentityData, render_identity
 
 COVER_STYLES = ("mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
@@ -22,6 +25,57 @@ class Capa:
     identity_embedded: bool = False
     warnings: tuple[CoverWarning, ...] = ()
     used_photo_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CoverPhoto:
+    id: str
+    image: Image.Image
+
+
+def _cover_metadata(photo: CoverPhoto, key: str, default: float) -> float:
+    try:
+        return float(photo.image.info.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _candidate_score(
+    photo: CoverPhoto,
+    slot,
+    seen_groups: set[object],
+    seed: int,
+    source_rank: int,
+) -> tuple[float, float, int]:
+    image_ratio = photo.image.width / photo.image.height
+    slot_ratio = slot.bounds.width / slot.bounds.height
+    orientation = -abs(math.log(image_ratio / slot_ratio)) * 0.45
+    quality = (
+        _cover_metadata(photo, "quality", 0.5) * 0.60
+        + _cover_metadata(photo, "sharpness", 0.5) * 0.18
+        + _cover_metadata(photo, "exposure", 0.5) * 0.14
+        + _cover_metadata(photo, "density", 0.5) * 0.08
+    )
+    group = photo.image.info.get("similarity_group")
+    diversity = 0.0
+    if group is not None:
+        diversity = 0.55 if group not in seen_groups else -0.35
+    focus = photo.image.info.get("focus")
+    focus_score = 0.0
+    if isinstance(focus, (tuple, list)) and len(focus) == 2:
+        try:
+            focus_score = -math.dist(tuple(map(float, focus)), slot.preferred_focus) * 0.25
+        except (TypeError, ValueError):
+            pass
+    has_metadata = any(
+        key in photo.image.info
+        for key in ("quality", "sharpness", "exposure", "density", "similarity_group", "focus")
+    )
+    seeded_tie = 0.0
+    if has_metadata:
+        digest = sha256(f"{seed}\0{slot.id}\0{photo.id}".encode("utf-8")).digest()
+        seeded_tie = int.from_bytes(digest[:8], "big") / (2**64 - 1)
+    return (orientation + quality + diversity + focus_score, seeded_tie, -source_rank)
 
 
 def validate_cover_style(value: str) -> str:
@@ -127,6 +181,96 @@ def gerar_mosaico_editorial(items: list[Image.Image], width: int, height: int,
     return Capa(canvas, anchor)
 
 
+def gerar_curvas_editoriais(
+    items: list[CoverPhoto],
+    width: int,
+    height: int,
+    palette: tema.Paleta,
+    identity: IdentityData,
+    seed: int,
+) -> Capa:
+    """Compose one caller-owned photo into each slot of the balanced orbit."""
+    if len({photo.id for photo in items}) != len(items):
+        raise ValueError("A capa curva exige identificadores únicos para todas as fotos.")
+    layout = layout_orbita(width, height, len(items))
+    canvas = Image.new("RGB", (width, height), palette.fundo_rgb)
+    remaining = list(items)
+    manual_order = bool(items) and all(
+        photo.image.info.get("manual_order") is True for photo in items
+    )
+    assigned_ids: list[str] = []
+    seen_groups: set[object] = set()
+    cover_warnings: list[CoverWarning] = []
+    try:
+        for slot in layout.slots:
+            candidates = []
+            try:
+                eligible = remaining[:1] if manual_order else remaining
+                for source_rank, photo in enumerate(eligible):
+                    candidates.append(
+                        (
+                            photo,
+                            frame_for_mask(
+                                photo.image,
+                                (slot.bounds.width, slot.bounds.height),
+                                slot.preferred_focus,
+                            ),
+                            _candidate_score(photo, slot, seen_groups, seed, source_rank),
+                        )
+                    )
+                ranked = (
+                    candidates
+                    if manual_order
+                    else sorted(candidates, key=lambda candidate: candidate[2], reverse=True)
+                )
+                photo, framed, _ = (
+                    ranked[0]
+                    if manual_order
+                    else next(
+                        (candidate for candidate in ranked if candidate[1].safe),
+                        ranked[0],
+                    )
+                )
+                if not framed.safe:
+                    cover_warnings.append(
+                        CoverWarning(
+                            "rosto_em_area_de_risco",
+                            "Um rosto pode ficar próximo à área de risco desta máscara; revise a capa.",
+                        )
+                    )
+                mask = render_mask(slot, (width, height))
+                try:
+                    crop_box = (
+                        slot.bounds.x,
+                        slot.bounds.y,
+                        slot.bounds.right,
+                        slot.bounds.bottom,
+                    )
+                    with mask.crop(crop_box) as local_mask:
+                        canvas.paste(framed.image, crop_box[:2], local_mask)
+                finally:
+                    mask.close()
+            finally:
+                for _, result, _ in candidates:
+                    result.image.close()
+            remaining.remove(photo)
+            assigned_ids.append(photo.id)
+            group = photo.image.info.get("similarity_group")
+            if group is not None:
+                seen_groups.add(group)
+        cover_warnings.extend(render_identity(canvas, layout, identity, palette))
+        return Capa(
+            canvas,
+            0.34,
+            identity_embedded=True,
+            warnings=tuple(cover_warnings),
+            used_photo_ids=tuple(assigned_ids),
+        )
+    except BaseException:
+        canvas.close()
+        raise
+
+
 def _losango(miniaturas: list[Image.Image], largura: int, altura: int,
              paleta: tema.Paleta) -> Image.Image:
     centros, passo_x, passo_y = _malha_losangos(len(miniaturas), largura, altura)
@@ -164,13 +308,22 @@ def _destaque(miniaturas: list[Image.Image], largura: int, altura: int,
     return fundo
 
 
-def gerar(estilo: str, miniaturas: list[Image.Image], largura: int, altura: int,
-          paleta: tema.Paleta) -> Capa:
+def gerar(
+    estilo: str,
+    miniaturas: list[Image.Image] | list[CoverPhoto],
+    largura: int,
+    altura: int,
+    paleta: tema.Paleta,
+    *,
+    identity: IdentityData | None = None,
+    seed: int = 0,
+) -> Capa:
     """Monta a capa no estilo pedido e diz onde o texto deve começar."""
-    if estilo == "losango":
-        return Capa(imagens.veu_para_texto(_losango(miniaturas, largura, altura, paleta),
-                                           paleta), 0.34)
-    if estilo == "destaque":
-        heroi = miniaturas[len(miniaturas) // 2]
-        return Capa(_destaque(miniaturas, largura, altura, heroi, paleta), 0.62)
-    return gerar_mosaico_editorial(miniaturas, largura, altura, paleta)
+    validate_cover_style(estilo)
+    if estilo == "mosaico":
+        return gerar_mosaico_editorial(miniaturas, largura, altura, paleta)  # type: ignore[arg-type]
+    if identity is None:
+        raise ValueError("A capa curvas_editoriais exige os dados de identidade.")
+    return gerar_curvas_editoriais(
+        miniaturas, largura, altura, paleta, identity, seed  # type: ignore[arg-type]
+    )

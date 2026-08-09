@@ -384,12 +384,14 @@ class Documento:
 
     # capa -----------------------------------------------------------------
     def capa(self, capa_jpeg: bytes, quantidade: int, chamada: str,
-             ancora: float = 0.34) -> None:
-        largura, altura = self.tamanho
+             ancora: float = 0.34, identity_embedded: bool = False) -> None:
+        largura, altura = tema.A4_PAISAGEM if identity_embedded else self.tamanho
         pagina = self.pdf.new_page(width=largura, height=altura)
         self.tipo.registrar(pagina)
         pagina.insert_image(pymupdf.Rect(0, 0, largura, altura), stream=capa_jpeg,
                             keep_proportion=False)
+        if identity_embedded:
+            return
 
         centro = largura / 2
         base = altura * ancora

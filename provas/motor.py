@@ -17,6 +17,7 @@ from PIL import Image
 from . import capas, documento, imagens, preview, tema
 from .analise import AnalysisResult, analisar_fotos
 from .compositor import compose, validate_plan
+from .identidade_capa import CoverWarning, IdentityData
 from .modelos import BookPlan, PhotoInfo
 from .templates import catalog
 
@@ -92,6 +93,22 @@ class Resultado:
     fotos: int
     paginas: int
     falhas: list[tuple[str, str]] = field(default_factory=list)
+    warnings: tuple[CoverWarning, ...] = ()
+
+
+class PreviewResult(tuple):
+    """Tuple-compatible thumbnails carrying non-blocking cover diagnostics."""
+
+    warnings: tuple[CoverWarning, ...]
+
+    def __new__(
+        cls,
+        images: list[Image.Image] | tuple[Image.Image, ...],
+        warnings: tuple[CoverWarning, ...] = (),
+    ) -> "PreviewResult":
+        result = super().__new__(cls, images)
+        result.warnings = tuple(warnings)
+        return result
 
 
 @dataclass(frozen=True)
@@ -109,6 +126,7 @@ class Cancelado(Exception):
 
 @dataclass
 class _Preparada:
+    photo_id: str
     jpeg: bytes
     proporcao: float
     rotulo: str
@@ -270,26 +288,43 @@ def _prepare_render_assets(
     return assets, analysis
 
 
-def _logo_document(config: Config) -> tuple[bytes | None, float, tema.Paleta]:
+def _logo_document(
+    config: Config,
+) -> tuple[bytes | None, float, tema.Paleta, tuple[CoverWarning, ...]]:
     palette = tema.paleta(config.cor_fundo)
     logo_path = config.logo.strip()
     if not logo_path or not os.path.exists(logo_path):
-        return None, 1200 / 630, palette
-    logo = imagens.carregar_logo(logo_path)
-    version = logo if palette.claro else imagens.logo_bicolor(logo)
+        return (
+            None,
+            1200 / 630,
+            palette,
+            (CoverWarning("logo_ausente", "O logotipo não foi encontrado; a capa foi criada sem ele."),),
+        )
+    logo: Image.Image | None = None
+    version: Image.Image | None = None
     try:
+        logo = imagens.carregar_logo(logo_path)
+        version = logo if palette.claro else imagens.logo_bicolor(logo)
         buffer = io.BytesIO()
         version.save(buffer, format="PNG")
-        return buffer.getvalue(), version.width / version.height, palette
+        return buffer.getvalue(), version.width / version.height, palette, ()
+    except (OSError, SyntaxError, ValueError):
+        return (
+            None,
+            1200 / 630,
+            palette,
+            (CoverWarning("logo_ilegivel", "O logotipo não pôde ser lido; a capa foi criada sem ele."),),
+        )
     finally:
-        if version is not logo:
+        if version is not None and version is not logo:
             version.close()
-        logo.close()
+        if logo is not None:
+            logo.close()
 
 
 def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
-    logo, logo_ratio, palette = _logo_document(config)
-    return documento.Documento(
+    logo, logo_ratio, palette, warnings = _logo_document(config)
+    result = documento.Documento(
         config.titulo,
         config.subtitulo,
         True,
@@ -302,9 +337,11 @@ def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
         paleta=palette,
         modo=mode,
     )
+    result.cover_warnings = warnings
+    return result
 
 
-def _render_style_fingerprint(config: Config, mode: str) -> tuple[object, ...]:
+def _render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[object, ...]:
     """Describe every config input that can alter an internal rendered page."""
     logo_path = config.logo.strip()
     logo_state: tuple[object, ...] = (os.path.abspath(logo_path), None, None)
@@ -316,6 +353,8 @@ def _render_style_fingerprint(config: Config, mode: str) -> tuple[object, ...]:
             pass
     return (
         mode,
+        seed,
+        config.estilo_capa,
         config.titulo,
         config.subtitulo,
         config.estudio,
@@ -335,11 +374,12 @@ def gerar_preview(
     width: int = 420,
     progresso=None,
     cancelar: object | None = None,
-) -> tuple[Image.Image, ...]:
+) -> PreviewResult:
     """Render thumbnails for the supplied plan without composing a replacement."""
     config = config.com_padroes()
     assets, analysis = _prepare_render_assets(config, plan, progresso, cancelar)
     thumbnails = []
+    cover_warnings: tuple[CoverWarning, ...] = ()
     if config.capa_mosaico and plan.cover_photo_ids:
         _avisar(progresso, 0, max(1, len(plan.pages) + 1), "Renderizando capa…", cancelar)
         cover_document = _new_editorial_document(config, plan.mode)
@@ -350,7 +390,8 @@ def gerar_preview(
                 plan,
                 {photo.id: photo for photo in analysis.photos},
             )
-            if rendered:
+            if rendered is not None:
+                cover_warnings = rendered
                 page = cover_document.pdf[0]
                 scale = width / page.rect.width
                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
@@ -360,7 +401,7 @@ def gerar_preview(
         finally:
             cover_document.fechar()
     total = len(plan.pages) + len(thumbnails)
-    style_fingerprint = _render_style_fingerprint(config, plan.mode)
+    style_fingerprint = _render_style_fingerprint(config, plan.mode, plan.seed)
     for index, page_plan in enumerate(plan.pages, start=1):
         offset = len(thumbnails)
         _avisar(progresso, offset + index - 1, max(1, total), "Renderizando prévia…", cancelar)
@@ -381,7 +422,7 @@ def gerar_preview(
             f"Prévia… página {index}/{len(plan.pages)}",
             cancelar,
         )
-    return tuple(thumbnails)
+    return PreviewResult(thumbnails, cover_warnings)
 
 
 def _render_cover(
@@ -389,31 +430,67 @@ def _render_cover(
     config: Config,
     plan: BookPlan,
     photos: dict[str, PhotoInfo],
-) -> bool:
+) -> tuple[CoverWarning, ...] | None:
     selected = [photos[photo_id] for photo_id in plan.cover_photo_ids if photo_id in photos]
     if not config.capa_mosaico or not selected:
-        return False
-    thumbnails: list[Image.Image] = []
+        return None
+    cover_photos: list[capas.CoverPhoto] = []
     try:
         for info in selected:
             source = imagens.abrir(imagens.Foto(info.path, info.label))
             try:
                 resized = imagens.redimensionar(source, LADO_MINIATURA)
-                thumbnails.append(resized.copy() if resized is source else resized)
+                thumbnail = resized.copy() if resized is source else resized
+                thumbnail.info.update(
+                    quality=info.quality,
+                    sharpness=info.sharpness,
+                    exposure=info.exposure,
+                    density=info.density,
+                    similarity_group=info.similarity_group,
+                    manual_order=bool(config.cover_ids),
+                )
+                cover_photos.append(capas.CoverPhoto(info.id, thumbnail))
             finally:
                 source.close()
         width = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
         height = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
-        cover = capas.gerar_mosaico_editorial(thumbnails, width, height, doc.p)
+        if config.estilo_capa == "mosaico":
+            cover = capas.gerar(
+                "mosaico", [photo.image for photo in cover_photos], width, height, doc.p
+            )
+        else:
+            cover = capas.gerar(
+                "curvas_editoriais",
+                cover_photos,
+                width,
+                height,
+                doc.p,
+                identity=IdentityData(
+                    config.titulo, config.estudio, config.site, config.logo
+                ),
+                seed=plan.seed,
+            )
         try:
             photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
-            doc.capa(_codificar(cover.imagem, 88), photo_count, config.chamada, cover.ancora)
+            doc.capa(
+                _codificar(cover.imagem, 88),
+                photo_count,
+                config.chamada,
+                cover.ancora,
+                identity_embedded=cover.identity_embedded,
+            )
+            warnings = list(cover.warnings)
+            warning_codes = {warning.code for warning in warnings}
+            for warning in getattr(doc, "cover_warnings", ()):
+                if warning.code not in warning_codes:
+                    warnings.append(warning)
+                    warning_codes.add(warning.code)
+            return tuple(warnings)
         finally:
             cover.imagem.close()
     finally:
-        for thumbnail in thumbnails:
-            thumbnail.close()
-    return True
+        for photo in cover_photos:
+            photo.image.close()
 
 
 def _validate_export(path: str, expected_pages: int) -> None:
@@ -474,7 +551,7 @@ def exportar(
     destination = config.saida
     temporary = _new_sibling_temp(destination)
     doc: documento.Documento | None = None
-    cover_rendered = False
+    cover_rendered: tuple[CoverWarning, ...] | None = None
     try:
         doc = _new_editorial_document(config, plan.mode)
         cover_rendered = _render_cover(
@@ -491,7 +568,7 @@ def exportar(
             doc.render_page(page_plan, template, assets)
             _avisar(progresso, index, max(1, total), f"Diagramando… página {index}/{total}", cancelar)
         doc.salvar(temporary)
-        _validate_export(temporary, len(plan.pages) + int(cover_rendered))
+        _validate_export(temporary, len(plan.pages) + int(cover_rendered is not None))
         if _cancelled(cancelar):
             raise Cancelado()
         publication = _publication_lock(destination)
@@ -508,7 +585,11 @@ def exportar(
         progresso(len(plan.pages), max(1, len(plan.pages)), "Pronto.")
     photo_count = len({photo_id for page in plan.pages for photo_id in page.photo_ids})
     return Resultado(
-        destination, photo_count, len(plan.pages), list(analysis.failures),
+        destination,
+        photo_count,
+        len(plan.pages),
+        list(analysis.failures),
+        cover_rendered or (),
     )
 
 
@@ -534,7 +615,25 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
     cores = tema.paleta(config.cor_fundo)
 
     caminho_logo = config.logo.strip()
-    logo_base = imagens.carregar_logo(caminho_logo) if caminho_logo and os.path.exists(caminho_logo) else None
+    legacy_cover_warnings: list[CoverWarning] = []
+    logo_base = None
+    if caminho_logo and os.path.exists(caminho_logo):
+        try:
+            logo_base = imagens.carregar_logo(caminho_logo)
+        except (OSError, SyntaxError, ValueError):
+            legacy_cover_warnings.append(
+                CoverWarning(
+                    "logo_ilegivel",
+                    "O logotipo não pôde ser lido; a capa foi criada sem ele.",
+                )
+            )
+    else:
+        legacy_cover_warnings.append(
+            CoverWarning(
+                "logo_ausente",
+                "O logotipo não foi encontrado; a capa foi criada sem ele.",
+            )
+        )
     usar_marca = config.marca_dagua and config.marca_opacidade > 0
     marca = (
         imagens.logo_branco(logo_base)
@@ -583,6 +682,7 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
                 pagina = imagens.aplicar_marca_dagua(pagina, marca, config.marca_largura,
                                                      config.marca_opacidade)
             preparadas[indice] = _Preparada(
+                photo_id=foto.caminho,
                 jpeg=_codificar(pagina, qualidade_jpeg),
                 proporcao=pagina.width / pagina.height,
                 rotulo=foto.rotulo,
@@ -614,13 +714,64 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
         nota_capa="CADA FOTO TRAZ SEU CÓDIGO LOGO ABAIXO" if config.mostrar_codigos else "",
         estudio=config.estudio, site=config.site, paleta=cores)
 
-    if config.capa_mosaico:
-        avisar(total, total, "Montando a capa…")
-        largura_px = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
-        altura_px = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
-        capa = capas.gerar(config.estilo_capa, [p.miniatura for p in prontas],
-                           largura_px, altura_px, cores)
-        doc.capa(_codificar(capa.imagem, 88), len(prontas), config.chamada, capa.ancora)
+    try:
+        if config.capa_mosaico:
+            avisar(total, total, "Montando a capa…")
+            cover_size = (
+                tema.A4_PAISAGEM
+                if config.estilo_capa == "curvas_editoriais"
+                else doc.tamanho
+            )
+            largura_px = round(cover_size[0] / 72 * DPI_MOSAICO)
+            altura_px = round(cover_size[1] / 72 * DPI_MOSAICO)
+            if config.estilo_capa == "mosaico":
+                cover_items: list[Image.Image] | list[capas.CoverPhoto] = [
+                    preparada.miniatura for preparada in prontas
+                ]
+                capa = capas.gerar("mosaico", cover_items, largura_px, altura_px, cores)
+            else:
+                by_id = {preparada.photo_id: preparada for preparada in prontas}
+                ordered = [
+                    by_id[photo_id]
+                    for photo_id in config.cover_ids
+                    if photo_id in by_id
+                ]
+                ordered.extend(preparada for preparada in prontas if preparada not in ordered)
+                selected = ordered[:9]
+                cover_items = [
+                    capas.CoverPhoto(preparada.photo_id, preparada.miniatura)
+                    for preparada in selected
+                ]
+                capa = capas.gerar(
+                    "curvas_editoriais",
+                    cover_items,
+                    largura_px,
+                    altura_px,
+                    cores,
+                    identity=IdentityData(
+                        config.titulo, config.estudio, config.site, config.logo
+                    ),
+                    seed=config.semente,
+                )
+            try:
+                doc.capa(
+                    _codificar(capa.imagem, 88),
+                    len(prontas),
+                    config.chamada,
+                    capa.ancora,
+                    identity_embedded=capa.identity_embedded,
+                )
+                warning_codes = {warning.code for warning in capa.warnings}
+                legacy_cover_warnings = list(capa.warnings) + [
+                    warning
+                    for warning in legacy_cover_warnings
+                    if warning.code not in warning_codes
+                ]
+            finally:
+                capa.imagem.close()
+    finally:
+        for preparada in prontas:
+            preparada.miniatura.close()
 
     por_pagina = config.por_pagina
     paginas = -(-len(prontas) // por_pagina)
@@ -639,4 +790,10 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
     os.makedirs(os.path.dirname(config.saida) or ".", exist_ok=True)
     doc.salvar(config.saida)
     avisar(total, total, "Pronto.")
-    return Resultado(config.saida, len(prontas), paginas, falhas)
+    return Resultado(
+        config.saida,
+        len(prontas),
+        paginas,
+        falhas,
+        tuple(legacy_cover_warnings),
+    )

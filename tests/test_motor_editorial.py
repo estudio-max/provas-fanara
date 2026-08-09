@@ -258,7 +258,13 @@ def test_proof_and_clean_export_use_the_same_unwatermarked_cover_image(tmp_path:
     ImageDraw.Draw(logo).rectangle((4, 4, 115, 35), fill=(0, 0, 0, 255))
     logo.save(logo_path)
     page = PagePlan(1, "single-landscape", (str(path),), "opening")
-    config = motor.Config(str(tmp_path), logo=str(logo_path), marca_opacidade=0.6)
+    config = motor.Config(
+        str(tmp_path),
+        titulo="Capa",
+        logo=str(logo_path),
+        marca_opacidade=0.6,
+        estilo_capa="curvas_editoriais",
+    )
     cover_images = []
 
     for mode in ("prova", "fotolivro"):
