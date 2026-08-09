@@ -265,6 +265,28 @@ def _prepare_logo(
             logo.close()
 
 
+def logo_is_renderable(path: str) -> bool:
+    """Preflight the same raster contract used by the identity renderer."""
+    clean_path = path.strip()
+    if not clean_path or not os.path.isfile(clean_path):
+        return False
+    try:
+        with Image.open(clean_path) as opened:
+            transposed = ImageOps.exif_transpose(opened)
+            try:
+                with transposed.convert("RGBA") as logo:
+                    logo.load()
+                    if logo.width <= 0 or logo.height <= 0:
+                        return False
+                    with logo.getchannel("A") as alpha:
+                        return alpha.getbbox() is not None
+            finally:
+                if transposed is not opened:
+                    transposed.close()
+    except (OSError, SyntaxError, ValueError):
+        return False
+
+
 def render_identity(
     canvas: Image.Image,
     layout: CurveLayout,

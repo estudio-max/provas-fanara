@@ -338,10 +338,12 @@ def test_invalid_logo_warns_and_exports(tmp_path: Path):
         estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
     )
     analysis = motor.analisar_plano(config)
+    original_cover_ids = analysis.plan.cover_photo_ids
     preview = motor.gerar_preview(config, analysis.plan, width=320)
     result = motor.exportar(config, analysis.plan)
 
     assert result.warnings == preview.warnings
+    assert analysis.plan.cover_photo_ids == original_cover_ids
     assert [warning.message for warning in result.warnings] == [
         "O logotipo não pôde ser lido; a capa foi criada sem ele."
     ]
@@ -367,11 +369,13 @@ def test_overlong_identity_blocks_export(tmp_path: Path):
         estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
     )
     analysis = motor.analisar_plano(config)
+    original_cover_ids = analysis.plan.cover_photo_ids
     message = "O texto da capa não cabe. Abrevie o conteúdo antes de exportar."
 
     with pytest.raises(CoverTextOverflow, match="Abrevie") as error:
         motor.exportar(config, analysis.plan)
     assert str(error.value) == message
+    assert analysis.plan.cover_photo_ids == original_cover_ids
     assert output.read_bytes() == previous
     assert not list(tmp_path.glob(".*.tmp"))
 
@@ -385,6 +389,7 @@ def test_missing_logo_keeps_balanced_cover(tmp_path: Path):
         estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
     )
     analysis = motor.analisar_plano(config)
+    original_cover_ids = analysis.plan.cover_photo_ids
     preview = motor.gerar_preview(config, analysis.plan, width=320)
     result = motor.exportar(config, analysis.plan)
 
@@ -393,6 +398,7 @@ def test_missing_logo_keeps_balanced_cover(tmp_path: Path):
         "O logotipo não foi encontrado; a capa foi criada sem ele."
     ]
     assert result.warnings == preview.warnings
+    assert analysis.plan.cover_photo_ids == original_cover_ids
     with pymupdf.open(output) as pdf:
         rendered = _render_at_width(pdf[0], 320)
         try:
@@ -405,18 +411,38 @@ def test_missing_logo_keeps_balanced_cover(tmp_path: Path):
 
 def test_edge_face_is_kept_inside_mask(tmp_path: Path, monkeypatch):
     from provas import capas
+    from provas.capa_curvas import layout_orbita, render_mask
     from provas.enquadramento import FaceBox, frame_for_mask
 
     session = _make_curved_case(tmp_path, 1, name="rosto-na-borda")
     photo_path = next(session.glob("*.jpg"))
-    # Exactly on the 8% safe inset: visually near the edge, but protectable.
-    face = FaceBox(0.08, 0.08, 0.22, 0.24, confidence=0.96)
+    # Near the source edge, but still geometrically protectable by this mask.
+    face = FaceBox(0.25, 0.08, 0.22, 0.24, confidence=0.96)
+    layout = layout_orbita(1600, 1131, 1)
+    slot = layout.slots[0]
     with Image.open(photo_path) as source:
         framed = frame_for_mask(
-            source, (600, 900), (0.5, 0.35), detector=lambda _image: (face,)
+            source,
+            (slot.bounds.width, slot.bounds.height),
+            slot.preferred_focus,
+            detector=lambda _image: (face,),
         )
     assert framed.safe is True
     assert framed.crop.contains(face.center)
+    crop = framed.crop
+    face_box = (
+        math.floor(slot.bounds.x + (face.x - crop.x) / crop.width * slot.bounds.width),
+        math.floor(slot.bounds.y + (face.y - crop.y) / crop.height * slot.bounds.height),
+        math.ceil(slot.bounds.x + (face.x + face.width - crop.x) / crop.width * slot.bounds.width),
+        math.ceil(slot.bounds.y + (face.y + face.height - crop.y) / crop.height * slot.bounds.height),
+    )
+    mask = render_mask(slot, (1600, 1131))
+    try:
+        with mask.crop(face_box) as face_region:
+            assert face_region.getextrema()[0] >= 128
+    finally:
+        mask.close()
+        framed.image.close()
 
     original = capas.frame_for_mask
     monkeypatch.setattr(
@@ -431,12 +457,53 @@ def test_edge_face_is_kept_inside_mask(tmp_path: Path, monkeypatch):
         estilo_capa="curvas_editoriais", modo="fotolivro", qualidade="leve",
     )
     analysis = motor.analisar_plano(config)
+    original_cover_ids = analysis.plan.cover_photo_ids
     preview = motor.gerar_preview(config, analysis.plan, width=320)
     result = motor.exportar(config, analysis.plan)
     assert all(warning.code != "rosto_em_area_de_risco" for warning in result.warnings)
     assert result.warnings == preview.warnings
+    assert analysis.plan.cover_photo_ids == original_cover_ids
+    with pymupdf.open(config.saida) as pdf:
+        rendered = _render_at_width(pdf[0], 320)
+        try:
+            assert rendered.tobytes() == preview[0].tobytes()
+        finally:
+            rendered.close()
     for image in preview:
         image.close()
+
+
+def test_automatic_cover_avoids_face_cut_by_curve_mask(monkeypatch):
+    from provas import capas, tema
+    from provas.enquadramento import CropRect, FaceBox, FrameResult
+    from provas.identidade_capa import IdentityData
+
+    edge = Image.new("RGB", (200, 300), (210, 170, 140))
+    centered = Image.new("RGB", (200, 300), (80, 110, 140))
+
+    def framed(image, target_size, _focus):
+        face = (
+            FaceBox(0.01, 0.01, 0.28, 0.25, 1.0)
+            if image is edge
+            else FaceBox(0.40, 0.28, 0.22, 0.22, 1.0)
+        )
+        return FrameResult(
+            image.resize(target_size), CropRect(0.0, 0.0, 1.0, 1.0), (face,), 1, True
+        )
+
+    monkeypatch.setattr(capas, "frame_for_mask", framed)
+    monkeypatch.setattr(capas, "_candidate_score", lambda *_args: (0,))
+    cover = capas.gerar_curvas_editoriais(
+        [capas.CoverPhoto("borda", edge), capas.CoverPhoto("centro", centered)],
+        1600, 1131, tema.paleta(), IdentityData("Retratos", "", ""), seed=24,
+    )
+    try:
+        assert cover.used_photo_ids[0] == "centro"
+        assert [warning.code for warning in cover.warnings].count("rosto_em_area_de_risco") == 1
+    finally:
+        cover.imagem.close()
+        edge.close()
+        centered.close()
 
 
 def test_automatic_cover_avoids_logo_over_detected_face(tmp_path: Path, monkeypatch):
@@ -452,9 +519,9 @@ def test_automatic_cover_avoids_logo_over_detected_face(tmp_path: Path, monkeypa
 
     def framed(image, target_size, _focus):
         face = (
-            FaceBox(0.02, 0.02, 0.34, 0.25, 1.0)
+            FaceBox(0.25, 0.08, 0.20, 0.15, 1.0)
             if image is covered
-            else FaceBox(0.64, 0.16, 0.24, 0.22, 1.0)
+            else FaceBox(0.64, 0.30, 0.20, 0.20, 1.0)
         )
         return FrameResult(
             image.resize(target_size), CropRect(0.0, 0.0, 1.0, 1.0), (face,), 1, True
@@ -470,6 +537,48 @@ def test_automatic_cover_avoids_logo_over_detected_face(tmp_path: Path, monkeypa
     )
     try:
         assert cover.used_photo_ids[0] == "livre"
+    finally:
+        cover.imagem.close()
+        covered.close()
+        clear.close()
+
+
+@pytest.mark.parametrize("logo_kind", ("ausente", "corrompido"))
+def test_unrenderable_logo_does_not_reorder_automatic_cover(
+    tmp_path: Path, monkeypatch, logo_kind: str
+):
+    from provas import capas, tema
+    from provas.enquadramento import CropRect, FaceBox, FrameResult
+    from provas.identidade_capa import IdentityData
+
+    logo = tmp_path / "logo.png"
+    if logo_kind == "corrompido":
+        logo.write_bytes(b"nao e uma imagem")
+    covered = Image.new("RGB", (200, 300), (210, 170, 140))
+    clear = Image.new("RGB", (200, 300), (80, 110, 140))
+
+    def framed(image, target_size, _focus):
+        face = (
+            FaceBox(0.25, 0.08, 0.20, 0.15, 1.0)
+            if image is covered
+            else FaceBox(0.64, 0.30, 0.20, 0.20, 1.0)
+        )
+        return FrameResult(
+            image.resize(target_size), CropRect(0.0, 0.0, 1.0, 1.0), (face,), 1, True
+        )
+
+    monkeypatch.setattr(capas, "frame_for_mask", framed)
+    monkeypatch.setattr(capas, "_candidate_score", lambda *_args: (0,))
+    cover = capas.gerar_curvas_editoriais(
+        [capas.CoverPhoto("primeira", covered), capas.CoverPhoto("segunda", clear)],
+        1600, 1131, tema.paleta(),
+        IdentityData("Retratos", "Fanara", "fanara.com.br", str(logo)),
+        seed=23,
+    )
+    try:
+        assert cover.used_photo_ids[0] == "primeira"
+        expected = "logo_ausente" if logo_kind == "ausente" else "logo_ilegivel"
+        assert [warning.code for warning in cover.warnings] == [expected]
     finally:
         cover.imagem.close()
         covered.close()

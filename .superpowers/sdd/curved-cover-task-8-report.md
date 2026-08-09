@@ -64,3 +64,18 @@ Seeds, fixtures e comando de reprodução estão registrados em
 O pacote será reconstruído novamente após o commit para que o campo
 `git_commit` do manifesto referencie o HEAD definitivo desta Task.
 
+## Correções da revisão independente
+
+A primeira revisão encontrou dois findings Important, ambos reproduzidos com
+RED antes da correção:
+
+- logo ausente/corrompido influenciava a associação automática mesmo sem ser
+  renderizado; um preflight raster alinhado ao renderer agora ativa a exclusão
+  facial somente para logo realmente carregável;
+- a segurança do crop retangular não garantia a bbox facial dentro da curva;
+  cada slot agora reutiliza sua máscara real e exige toda a bbox confiante em
+  opacidade mínima 128. Sem candidata segura, o warning continua explícito.
+
+O teste de rosto na borda verifica a cobertura real da bbox, estabilidade de
+IDs e paridade PDF/prévia. Os casos de logo também registram estabilidade de
+IDs. A linha extra no EOF deste relatório foi removida.

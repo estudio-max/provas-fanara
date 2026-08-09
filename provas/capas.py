@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 from . import imagens, tema
 from .capa_curvas import layout_orbita, render_mask
 from .enquadramento import MIN_FACE_CONFIDENCE, FrameResult, frame_for_mask
-from .identidade_capa import CoverWarning, IdentityData, render_identity
+from .identidade_capa import CoverWarning, IdentityData, logo_is_renderable, render_identity
 
 COVER_STYLES = ("mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
@@ -93,6 +93,32 @@ def _face_overlaps_identity_rect(frame: FrameResult, slot, rect) -> bool:
         if left < rect.right and right > rect.x and top < rect.bottom and bottom > rect.y:
             return True
     return False
+
+
+def _faces_inside_curve_mask(frame: FrameResult, slot, mask: Image.Image) -> bool:
+    """Require every confident face box to remain in the opaque mask interior."""
+    crop = frame.crop
+    for face in frame.face_boxes:
+        if face.confidence < MIN_FACE_CONFIDENCE:
+            continue
+        box = (
+            math.floor(slot.bounds.x + (face.x - crop.x) / crop.width * slot.bounds.width),
+            math.floor(slot.bounds.y + (face.y - crop.y) / crop.height * slot.bounds.height),
+            math.ceil(
+                slot.bounds.x
+                + (face.x + face.width - crop.x) / crop.width * slot.bounds.width
+            ),
+            math.ceil(
+                slot.bounds.y
+                + (face.y + face.height - crop.y) / crop.height * slot.bounds.height
+            ),
+        )
+        if box[0] < 0 or box[1] < 0 or box[2] > mask.width or box[3] > mask.height:
+            return False
+        with mask.crop(box) as region:
+            if region.width <= 0 or region.height <= 0 or region.getextrema()[0] < 128:
+                return False
+    return True
 
 
 def validate_cover_style(value: str) -> str:
@@ -215,12 +241,14 @@ def gerar_curvas_editoriais(
     manual_order = bool(items) and all(
         photo.image.info.get("manual_order") is True for photo in items
     )
+    has_renderable_logo = logo_is_renderable(identity.logo_path)
     assigned_ids: list[str] = []
     seen_groups: set[object] = set()
     cover_warnings: list[CoverWarning] = []
     try:
         for slot in layout.slots:
             candidates = []
+            mask = render_mask(slot, (width, height))
             try:
                 eligible = remaining[:1] if manual_order else remaining
                 for source_rank, photo in enumerate(eligible):
@@ -243,8 +271,8 @@ def gerar_curvas_editoriais(
 
                 def is_safe_candidate(candidate) -> bool:
                     frame = candidate[1]
-                    return frame.safe and not (
-                        identity.logo_path
+                    return frame.safe and _faces_inside_curve_mask(frame, slot, mask) and not (
+                        has_renderable_logo
                         and _face_overlaps_identity_rect(frame, slot, layout.logo_rect)
                     )
 
@@ -263,21 +291,18 @@ def gerar_curvas_editoriais(
                             "Um rosto pode ficar próximo à área de risco desta máscara; revise a capa.",
                         )
                     )
-                mask = render_mask(slot, (width, height))
-                try:
-                    crop_box = (
-                        slot.bounds.x,
-                        slot.bounds.y,
-                        slot.bounds.right,
-                        slot.bounds.bottom,
-                    )
-                    with mask.crop(crop_box) as local_mask:
-                        canvas.paste(framed.image, crop_box[:2], local_mask)
-                finally:
-                    mask.close()
+                crop_box = (
+                    slot.bounds.x,
+                    slot.bounds.y,
+                    slot.bounds.right,
+                    slot.bounds.bottom,
+                )
+                with mask.crop(crop_box) as local_mask:
+                    canvas.paste(framed.image, crop_box[:2], local_mask)
             finally:
                 for _, result, _ in candidates:
                     result.image.close()
+                mask.close()
             remaining.remove(photo)
             assigned_ids.append(photo.id)
             group = photo.image.info.get("similarity_group")
