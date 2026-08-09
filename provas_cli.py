@@ -134,6 +134,11 @@ def criar_parser() -> argparse.ArgumentParser:
                         help="salva o plano reproduzível em um arquivo .provas.json")
     parser.add_argument("--abrir-projeto", default="", metavar="ARQUIVO",
                         help="abre um projeto salvo e exporta exatamente seu plano")
+    parser.add_argument(
+        "--sobrescrever",
+        action="store_true",
+        help="permite substituir explicitamente um PDF de destino existente",
+    )
     parser.add_argument("--subpastas", action="store_true")
     parser.add_argument("--amostra", action="store_true", help="usa só as 12 primeiras fotos")
     return parser
@@ -187,6 +192,15 @@ def _salvar_estado(path: str, config: motor.Config, analysis: motor.PlanAnalysis
     save_project(path, state)
 
 
+def _validar_destino_pdf(path: str, sobrescrever: bool) -> None:
+    """Recusa publicação destrutiva sem consentimento explícito na CLI."""
+    if Path(path).exists() and not sobrescrever:
+        raise FileExistsError(
+            f"O PDF de destino já existe: {path}. "
+            "Escolha outro caminho ou use --sobrescrever para substituí-lo."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = criar_parser()
     args = parser.parse_args(argv)
@@ -199,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
             state = load_project(args.abrir_projeto)
             config = state.config.to_motor_config()
             config.saida = args.saida
+            _validar_destino_pdf(config.saida, args.sobrescrever)
             resultado = motor.exportar(config, state.plan, progresso=progresso)
             print(f"\nProjeto aberto: {args.abrir_projeto}")
             modo = state.plan.mode
@@ -206,9 +221,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not args.pasta:
                 parser.error("informe a pasta da sessão ou use --abrir-projeto")
-            config = config_dos_argumentos(args)
+            config = config_dos_argumentos(args).com_padroes()
+            _validar_destino_pdf(config.saida, args.sobrescrever)
             analysis = motor.analisar_plano(config, progresso=progresso)
-            config = config.com_padroes()
             if args.salvar_projeto:
                 _salvar_estado(args.salvar_projeto, config, analysis)
                 print(f"\nProjeto salvo: {args.salvar_projeto}")

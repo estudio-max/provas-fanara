@@ -68,11 +68,14 @@ Para automação, gere um plano novo ou reexporte um salvo:
 python provas_cli.py "C:\ensaios\Bianca" --modo prova --capa mosaico --titulo "Seleção Bianca" --saida "C:\entregas\Bianca-prova.pdf"
 python provas_cli.py "C:\ensaios\Bianca" --modo fotolivro --capa curvas_editoriais --titulo "Bianca" --estudio "Estúdio Fanara" --site "fanara.com.br" --logo "C:\marcas\fanara.png" --salvar-projeto "C:\ensaios\Bianca.provas.json" --saida "C:\entregas\Bianca-fotolivro.pdf"
 python provas_cli.py --abrir-projeto "C:\ensaios\Bianca.provas.json" --saida "C:\entregas\Bianca.pdf"
+python provas_cli.py --abrir-projeto "C:\ensaios\Bianca.provas.json" --saida "C:\entregas\Bianca.pdf" --sobrescrever
 ```
 
 `--modo {prova,fotolivro}` é a interface atual; `--album` é um alias obsoleto
 para `--modo fotolivro`. Ao abrir um projeto, `--saida` é obrigatório e deve
-terminar em `.pdf`, para nunca sobrescrever silenciosamente um caminho salvo.
+terminar em `.pdf`. A CLI preserva qualquer PDF que já exista no destino;
+somente `--sobrescrever` autoriza explicitamente sua substituição, inclusive
+ao reexportar um projeto salvo.
 Use `python provas_cli.py --help` para os argumentos em português.
 
 ## Migração do Provas antigo

@@ -97,6 +97,45 @@ def test_cli_rejeita_destino_de_reabertura_que_nao_e_pdf(tmp_path: Path, image_f
     assert "pdf" in result.stderr.lower()
 
 
+def test_cli_preserva_pdf_existente_sem_consentimento_explicito(tmp_path: Path, image_factory):
+    image_factory("retrato.jpg", size=(300, 450))
+    saida = tmp_path / "existente.pdf"
+    original = b"PDF anterior deve permanecer intacto"
+    saida.write_bytes(original)
+
+    result = executar(str(tmp_path), "--amostra", "--saida", str(saida))
+
+    assert result.returncode == 1
+    assert saida.read_bytes() == original
+    assert "já existe" in result.stderr.lower()
+    assert "--sobrescrever" in result.stderr
+    assert "file exists" not in result.stderr.lower()
+
+
+def test_cli_sobrescreve_pdf_de_projeto_somente_com_flag_explicita(
+    tmp_path: Path, image_factory
+):
+    image_factory("projeto.jpg", size=(300, 450))
+    projeto = tmp_path / "sessao.provas.json"
+    primeira_saida = tmp_path / "primeira.pdf"
+    saved = executar(
+        str(tmp_path), "--amostra", "--salvar-projeto", str(projeto),
+        "--saida", str(primeira_saida),
+    )
+    assert saved.returncode == 0, saved.stderr
+    destino = tmp_path / "reexportado.pdf"
+    destino.write_bytes(b"arquivo anterior")
+
+    result = executar(
+        "--abrir-projeto", str(projeto), "--saida", str(destino), "--sobrescrever"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert destino.read_bytes().startswith(b"%PDF")
+    with pymupdf.open(destino) as pdf:
+        assert pdf.page_count >= 1
+
+
 def test_cli_album_e_alias_obsoleto_para_fotolivro(tmp_path: Path, image_factory):
     image_factory("album.jpg", size=(300, 450))
     saida = tmp_path / "album.pdf"
@@ -194,6 +233,7 @@ def test_readme_documenta_privacidade_migracao_logo_e_comandos_dos_dois_estilos(
     assert "Logotipo inválido é ignorado com aviso" in readme
     assert "--modo prova --capa mosaico" in readme
     assert "--modo fotolivro --capa curvas_editoriais" in readme
+    assert "--sobrescrever" in readme
 
 
 def test_verificador_lista_dependencias_editoriais_e_permissao_de_escrita():
