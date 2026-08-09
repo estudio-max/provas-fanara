@@ -12,7 +12,7 @@ import pymupdf
 import pytest
 from PIL import Image, ImageChops, ImageDraw
 
-from provas.modelos import BookPlan, PagePlan
+from provas.modelos import BookPlan, PagePlan, PhotoInfo
 
 
 def test_config_editorial_defaults_and_tuple_normalization(tmp_path: Path):
@@ -44,6 +44,98 @@ def test_config_defaults_validate_unknown_cover_style_in_portuguese(tmp_path: Pa
         match="Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.",
     ):
         Config(str(tmp_path), estilo_capa="desconhecido").com_padroes()
+
+
+def test_classica_cover_selection_uses_the_approved_deterministic_priority(monkeypatch):
+    from provas import capas
+
+    selection = getattr(capas, "selecionar_foto_classica", None)
+    assert callable(selection), "classic cover selection API is missing"
+
+    photos = (
+        PhotoInfo("vertical", "vertical.jpg", "vertical", 600, 900, 0, quality=1.0),
+        PhotoInfo("unsafe", "unsafe.jpg", "unsafe", 900, 600, 1, quality=1.0),
+        PhotoInfo("safe-low", "safe-low.jpg", "safe-low", 900, 600, 2, quality=0.2),
+        PhotoInfo(
+            "safe-best-b",
+            "safe-best-b.jpg",
+            "safe-best-b",
+            900,
+            600,
+            4,
+            sharpness=0.8,
+            exposure=0.7,
+            density=0.6,
+            quality=0.9,
+        ),
+        PhotoInfo(
+            "safe-best-a",
+            "safe-best-a.jpg",
+            "safe-best-a",
+            900,
+            600,
+            3,
+            sharpness=0.8,
+            exposure=0.7,
+            density=0.6,
+            quality=0.9,
+        ),
+        PhotoInfo(
+            "safe-best-0",
+            "safe-best-0.jpg",
+            "safe-best-0",
+            900,
+            600,
+            3,
+            sharpness=0.8,
+            exposure=0.7,
+            density=0.6,
+            quality=0.9,
+        ),
+        PhotoInfo(
+            "weighted",
+            "weighted.jpg",
+            "weighted",
+            900,
+            600,
+            5,
+            sharpness=1.0,
+            exposure=1.0,
+            density=1.0,
+            quality=0.2,
+        ),
+    )
+    monkeypatch.setattr(
+        capas,
+        "_classic_face_safe",
+        lambda photo: photo.id != "unsafe",
+    )
+
+    assert selection((photos[0], photos[2]), "") == "safe-low"
+    assert selection((photos[1], photos[2]), "") == "safe-low"
+    assert selection((photos[2], photos[6]), "") == "weighted"
+    assert selection((photos[3], photos[4]), "") == "safe-best-a"
+    assert selection((photos[4], photos[5]), "") == "safe-best-0"
+    assert selection(photos, "vertical") == "vertical"
+    assert selection(photos, "missing") == "safe-best-0"
+
+
+def test_classica_cover_fields_participate_in_the_render_fingerprint(tmp_path: Path):
+    from provas import motor
+
+    base = motor.Config(str(tmp_path))
+    baseline = motor._render_style_fingerprint(base, "fotolivro", 19)
+    changes = {
+        "foto_capa_id": "manual.jpg",
+        "capa_foco_x": 0.2,
+        "capa_foco_y": 0.8,
+        "capa_zoom": 1.7,
+        "capa_enquadramento": "manual",
+    }
+
+    for field, value in changes.items():
+        changed = motor.Config(**{**base.__dict__, field: value})
+        assert motor._render_style_fingerprint(changed, "fotolivro", 19) != baseline, field
 
 
 def test_project_round_trip_preserves_curved_editorial_cover_style(tmp_path: Path):

@@ -16,6 +16,7 @@ from PIL import Image
 
 from . import capas, documento, imagens, preview, tema
 from .analise import AnalysisResult, analisar_fotos
+from .capa_classica import ClassicCrop, render_classic_cover
 from .compositor import compose, validate_plan
 from .identidade_capa import CoverWarning, IdentityData
 from .modelos import BookPlan, PhotoInfo
@@ -378,6 +379,11 @@ def _render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[obj
         config.marca_dagua,
         config.marca_opacidade,
         config.marca_largura,
+        config.foto_capa_id,
+        config.capa_foco_x,
+        config.capa_foco_y,
+        config.capa_zoom,
+        config.capa_enquadramento,
         logo_state,
     )
 
@@ -396,7 +402,10 @@ def gerar_preview(
     # Surface the shared logo preflight even when the project intentionally has
     # no cover; the document renderer owns and closes every decoded logo.
     cover_warnings = _logo_document(config)[3]
-    if config.capa_mosaico and plan.cover_photo_ids:
+    has_cover_source = bool(analysis.photos) if config.estilo_capa == "classica" else bool(
+        plan.cover_photo_ids
+    )
+    if config.capa_mosaico and has_cover_source:
         _avisar(progresso, 0, max(1, len(plan.pages) + 1), "Renderizando capa…", cancelar)
         cover_document = _new_editorial_document(config, plan.mode)
         try:
@@ -447,34 +456,55 @@ def _render_cover(
     plan: BookPlan,
     photos: dict[str, PhotoInfo],
 ) -> tuple[CoverWarning, ...] | None:
+    if not config.capa_mosaico:
+        return None
     selected = [photos[photo_id] for photo_id in plan.cover_photo_ids if photo_id in photos]
-    if not config.capa_mosaico or not selected:
+    if config.estilo_capa != "classica" and not selected:
         return None
     cover_photos: list[capas.CoverPhoto] = []
+    classic_source: Image.Image | None = None
     try:
-        for info in selected:
-            source = imagens.abrir(imagens.Foto(info.path, info.label))
-            try:
-                resized = imagens.redimensionar(source, LADO_MINIATURA)
-                thumbnail = resized.copy() if resized is source else resized
-                thumbnail.info.update(
-                    quality=info.quality,
-                    sharpness=info.sharpness,
-                    exposure=info.exposure,
-                    density=info.density,
-                    similarity_group=info.similarity_group,
-                    manual_order=bool(config.cover_ids),
-                )
-                cover_photos.append(capas.CoverPhoto(info.id, thumbnail))
-            finally:
-                source.close()
         width = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
         height = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
+        if config.estilo_capa == "classica":
+            photo_id = capas.selecionar_foto_classica(tuple(photos.values()), config.foto_capa_id)
+            info = photos[photo_id]
+            classic_source = imagens.abrir(imagens.Foto(info.path, info.label))
+            cover = render_classic_cover(
+                capas.CoverPhoto(info.id, classic_source),
+                width,
+                height,
+                config.titulo,
+                config.estudio,
+                ClassicCrop(
+                    config.capa_foco_x,
+                    config.capa_foco_y,
+                    config.capa_zoom,
+                    config.capa_enquadramento,
+                ),
+            )
+        else:
+            for info in selected:
+                source = imagens.abrir(imagens.Foto(info.path, info.label))
+                try:
+                    resized = imagens.redimensionar(source, LADO_MINIATURA)
+                    thumbnail = resized.copy() if resized is source else resized
+                    thumbnail.info.update(
+                        quality=info.quality,
+                        sharpness=info.sharpness,
+                        exposure=info.exposure,
+                        density=info.density,
+                        similarity_group=info.similarity_group,
+                        manual_order=bool(config.cover_ids),
+                    )
+                    cover_photos.append(capas.CoverPhoto(info.id, thumbnail))
+                finally:
+                    source.close()
         if config.estilo_capa == "mosaico":
             cover = capas.gerar(
                 "mosaico", [photo.image for photo in cover_photos], width, height, doc.p
             )
-        else:
+        elif config.estilo_capa == "curvas_editoriais":
             cover = capas.gerar(
                 "curvas_editoriais",
                 cover_photos,
@@ -497,14 +527,17 @@ def _render_cover(
             )
             warnings = list(cover.warnings)
             warning_codes = {warning.code for warning in warnings}
-            for warning in getattr(doc, "cover_warnings", ()):
-                if warning.code not in warning_codes:
-                    warnings.append(warning)
-                    warning_codes.add(warning.code)
+            if config.estilo_capa != "classica":
+                for warning in getattr(doc, "cover_warnings", ()):
+                    if warning.code not in warning_codes:
+                        warnings.append(warning)
+                        warning_codes.add(warning.code)
             return tuple(warnings)
         finally:
             cover.imagem.close()
     finally:
+        if classic_source is not None:
+            classic_source.close()
         for photo in cover_photos:
             photo.image.close()
 

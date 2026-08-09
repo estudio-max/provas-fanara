@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from hashlib import sha256
 from dataclasses import dataclass
 
@@ -11,11 +12,13 @@ from . import imagens, tema
 from .capa_curvas import layout_orbita, render_mask
 from .enquadramento import MIN_FACE_CONFIDENCE, FrameResult, frame_for_mask
 from .identidade_capa import CoverWarning, IdentityData, logo_is_renderable, render_identity
+from .modelos import PhotoInfo
 
 COVER_STYLES = ("classica", "mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
 
 SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda lisa
+_CLASSIC_PHOTO_TARGET = (1344, 825)
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,46 @@ class Capa:
 class CoverPhoto:
     id: str
     image: Image.Image
+
+
+def _classic_face_safe(photo: PhotoInfo) -> bool:
+    """Tell whether the automatic classic crop can protect every confident face."""
+    source = imagens.abrir(imagens.Foto(photo.path, photo.label))
+    framed: FrameResult | None = None
+    try:
+        framed = frame_for_mask(source, _CLASSIC_PHOTO_TARGET, None)
+        return framed.safe
+    finally:
+        if framed is not None:
+            framed.image.close()
+        source.close()
+
+
+def selecionar_foto_classica(photos: Iterable[PhotoInfo], manual_id: str) -> str:
+    """Select one classic-cover photo without changing the caller-owned plan."""
+    candidates = tuple(photos)
+    by_id = {photo.id: photo for photo in candidates}
+    if manual_id in by_id:
+        return manual_id
+    if not candidates:
+        raise ValueError("A capa clássica exige ao menos uma fotografia válida.")
+
+    def rank(photo: PhotoInfo) -> tuple[int, int, float, int, str]:
+        quality = (
+            photo.quality * 0.60
+            + photo.sharpness * 0.18
+            + photo.exposure * 0.14
+            + photo.density * 0.08
+        )
+        return (
+            -(photo.width > photo.height),
+            -_classic_face_safe(photo),
+            -quality,
+            photo.index,
+            photo.id,
+        )
+
+    return min(candidates, key=rank).id
 
 
 def _cover_metadata(photo: CoverPhoto, key: str, default: float) -> float:

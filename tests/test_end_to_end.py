@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 
 from provas import motor
 from provas.compositor import compose, validate_plan
+from provas.modelos import BookPlan
 from provas.templates import catalog
 
 
@@ -283,6 +284,113 @@ def test_manual_cover_replacement_survives_preview_and_export(tmp_path: Path):
             assert cover.tobytes() == preview[0].tobytes()
         finally:
             cover.close()
+
+
+def test_classica_preview_matches_pdf_and_missing_manual_falls_back_without_persisting(
+    tmp_path: Path,
+):
+    session = tmp_path / "classica-fallback"
+    session.mkdir()
+    portrait = session / "01-retrato.jpg"
+    landscape = session / "02-horizontal.jpg"
+    with Image.new("RGB", (300, 450), (190, 35, 45)) as image:
+        image.save(portrait, quality=95)
+    with Image.new("RGB", (600, 400), (35, 175, 65)) as image:
+        image.save(landscape, quality=95)
+    output = tmp_path / "classica-fallback.pdf"
+    config = motor.Config(
+        str(session),
+        saida=str(output),
+        titulo="MEMÓRIAS",
+        estudio="FANARA ESTÚDIO",
+        estilo_capa="classica",
+        foto_capa_id="foto-ausente.jpg",
+        modo="fotolivro",
+        qualidade="leve",
+    )
+    analysis = motor.analisar_plano(config)
+    original_cover_ids = analysis.plan.cover_photo_ids
+
+    preview = motor.gerar_preview(config, analysis.plan, width=320)
+    result = motor.exportar(config, analysis.plan)
+
+    assert config.foto_capa_id == "foto-ausente.jpg"
+    assert analysis.plan.cover_photo_ids == original_cover_ids
+    assert result.warnings == preview.warnings == ()
+    assert preview[0].getpixel((2, preview[0].height // 2)) == (255, 255, 255)
+    center = preview[0].getpixel((preview[0].width // 2, preview[0].height // 2))
+    assert center[1] > center[0] * 2 and center[1] > center[2] * 2
+    with pymupdf.open(output) as pdf:
+        assert pdf[0].get_text().strip() == ""
+        rendered = _render_at_width(pdf[0], 320)
+        try:
+            assert rendered.size == preview[0].size
+            assert rendered.tobytes() == preview[0].tobytes()
+        finally:
+            rendered.close()
+    for image in preview:
+        image.close()
+
+
+def test_classica_manual_photo_wins_and_cover_is_identical_between_modes(tmp_path: Path):
+    session = tmp_path / "classica-manual"
+    session.mkdir()
+    manual = session / "01-manual-vertical.jpg"
+    automatic = session / "02-automatic-horizontal.jpg"
+    with Image.new("RGB", (300, 450), (185, 35, 45)) as image:
+        image.save(manual, quality=95)
+    with Image.new("RGB", (600, 400), (35, 175, 65)) as image:
+        image.save(automatic, quality=95)
+    base = motor.Config(
+        str(session),
+        titulo="MEMÓRIAS",
+        estudio="FANARA ESTÚDIO",
+        estilo_capa="classica",
+        foto_capa_id=str(manual),
+        qualidade="leve",
+    )
+    analysis = motor.analisar_plano(base)
+    original_cover_ids = analysis.plan.cover_photo_ids
+    cover_images = []
+
+    for mode in ("prova", "fotolivro"):
+        output = tmp_path / f"classica-{mode}.pdf"
+        config = motor.Config(**{**base.__dict__, "saida": str(output), "modo": mode})
+        plan = BookPlan(analysis.plan.seed, mode, original_cover_ids, analysis.plan.pages)
+        motor.exportar(config, plan)
+        assert plan.cover_photo_ids == original_cover_ids
+        with pymupdf.open(output) as pdf:
+            cover_xref = pdf[0].get_images(full=True)[0][0]
+            cover_images.append(pdf.extract_image(cover_xref)["image"])
+            rendered = _render_at_width(pdf[0], 320)
+            try:
+                center = rendered.getpixel((rendered.width // 2, rendered.height // 2))
+                assert center[0] > center[1] * 2 and center[0] > center[2] * 2
+            finally:
+                rendered.close()
+
+    assert cover_images[0] == cover_images[1]
+
+
+def test_classica_switching_cover_style_keeps_internal_page_pixels(tmp_path: Path):
+    session = _make_curved_case(tmp_path, 4, name="classica-estilos")
+    base = motor.Config(
+        str(session), titulo="MEMÓRIAS", estudio="FANARA ESTÚDIO",
+        modo="fotolivro", qualidade="leve", semente=812,
+    )
+    analysis = motor.analisar_plano(base)
+    internal_pages: list[tuple[bytes, ...]] = []
+
+    for style in ("classica", "mosaico", "curvas_editoriais"):
+        config = motor.Config(**{**base.__dict__, "estilo_capa": style})
+        preview = motor.gerar_preview(config, analysis.plan, width=320)
+        try:
+            internal_pages.append(tuple(image.tobytes() for image in preview[1:]))
+        finally:
+            for image in preview:
+                image.close()
+
+    assert internal_pages[0] == internal_pages[1] == internal_pages[2]
 
 
 @pytest.mark.parametrize("count", range(1, 10))
