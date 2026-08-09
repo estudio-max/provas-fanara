@@ -5,6 +5,7 @@ import math
 from collections.abc import Iterable
 from hashlib import sha256
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw
 
@@ -13,6 +14,9 @@ from .capa_curvas import layout_orbita, render_mask
 from .enquadramento import MIN_FACE_CONFIDENCE, FrameResult, frame_for_mask
 from .identidade_capa import CoverWarning, IdentityData, logo_is_renderable, render_identity
 from .modelos import PhotoInfo
+
+if TYPE_CHECKING:
+    from .capa_classica import ClassicCrop
 
 COVER_STYLES = ("classica", "mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
@@ -36,20 +40,34 @@ class CoverPhoto:
     image: Image.Image
 
 
-def _classic_face_safe(photo: PhotoInfo) -> bool:
-    """Tell whether the automatic classic crop can protect every confident face."""
+def _classic_face_safe(photo: PhotoInfo, crop: ClassicCrop | None = None) -> bool:
+    """Tell whether the exact classic crop keeps every confident face fully visible."""
+    from . import capa_classica
+
     source = imagens.abrir(imagens.Foto(photo.path, photo.label))
-    framed: FrameResult | None = None
     try:
-        framed = frame_for_mask(source, _CLASSIC_PHOTO_TARGET, None)
-        return framed.safe
+        requested = crop or capa_classica.ClassicCrop()
+        faces = tuple(capa_classica.enquadramento.detect_faces(source))
+        box = capa_classica.resolve_classic_crop_box(
+            source.size, _CLASSIC_PHOTO_TARGET, requested, faces
+        )
+        return all(
+            face.x * source.width >= box.left
+            and face.y * source.height >= box.top
+            and (face.x + face.width) * source.width <= box.right
+            and (face.y + face.height) * source.height <= box.bottom
+            for face in faces
+            if face.confidence >= MIN_FACE_CONFIDENCE
+        )
     finally:
-        if framed is not None:
-            framed.image.close()
         source.close()
 
 
-def selecionar_foto_classica(photos: Iterable[PhotoInfo], manual_id: str) -> str:
+def selecionar_foto_classica(
+    photos: Iterable[PhotoInfo],
+    manual_id: str,
+    crop: ClassicCrop | None = None,
+) -> str:
     """Select one classic-cover photo without changing the caller-owned plan."""
     candidates = tuple(photos)
     by_id = {photo.id: photo for photo in candidates}
@@ -67,7 +85,7 @@ def selecionar_foto_classica(photos: Iterable[PhotoInfo], manual_id: str) -> str
         )
         return (
             -(photo.width > photo.height),
-            -_classic_face_safe(photo),
+            -(_classic_face_safe(photo) if crop is None else _classic_face_safe(photo, crop)),
             -quality,
             photo.index,
             photo.id,

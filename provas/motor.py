@@ -467,7 +467,15 @@ def _render_cover(
         width = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
         height = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
         if config.estilo_capa == "classica":
-            photo_id = capas.selecionar_foto_classica(tuple(photos.values()), config.foto_capa_id)
+            crop = ClassicCrop(
+                config.capa_foco_x,
+                config.capa_foco_y,
+                config.capa_zoom,
+                config.capa_enquadramento,
+            )
+            photo_id = capas.selecionar_foto_classica(
+                tuple(photos.values()), config.foto_capa_id, crop
+            )
             info = photos[photo_id]
             classic_source = imagens.abrir(imagens.Foto(info.path, info.label))
             cover = render_classic_cover(
@@ -476,12 +484,7 @@ def _render_cover(
                 height,
                 config.titulo,
                 config.estudio,
-                ClassicCrop(
-                    config.capa_foco_x,
-                    config.capa_foco_y,
-                    config.capa_zoom,
-                    config.capa_enquadramento,
-                ),
+                crop,
             )
         else:
             for info in selected:

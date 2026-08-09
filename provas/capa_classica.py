@@ -5,6 +5,7 @@ não conhece configuração de UI, documentos, exportação ou persistência.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import math
 import os
@@ -223,19 +224,26 @@ def _draw_tracked_studio(
         x += draw.textlength(character, font=font) + tracking
 
 
-def _automatic_crop(source: Image.Image, requested: ClassicCrop) -> ClassicCrop:
+def resolve_classic_crop_box(
+    source_size: tuple[int, int],
+    target_size: tuple[int, int],
+    requested: ClassicCrop,
+    faces: Iterable[enquadramento.FaceBox] = (),
+) -> _CropBox:
+    """Resolve the exact source box used by an automatic or manual classic crop."""
     faces = tuple(
         face
-        for face in enquadramento.detect_faces(source)
+        for face in faces
         if face.confidence >= enquadramento.MIN_FACE_CONFIDENCE
     )
-    if not faces:
-        return requested
-    weights = tuple(max(face.width * face.height * face.confidence, 1e-12) for face in faces)
-    total = sum(weights)
-    focus_x = sum(face.center[0] * weight for face, weight in zip(faces, weights)) / total
-    focus_y = sum(face.center[1] * weight for face, weight in zip(faces, weights)) / total
-    return ClassicCrop(focus_x, focus_y, requested.zoom, requested.mode)
+    effective = requested
+    if requested.mode == "automatico" and faces:
+        weights = tuple(max(face.width * face.height * face.confidence, 1e-12) for face in faces)
+        total = sum(weights)
+        focus_x = sum(face.center[0] * weight for face, weight in zip(faces, weights)) / total
+        focus_y = sum(face.center[1] * weight for face, weight in zip(faces, weights)) / total
+        effective = ClassicCrop(focus_x, focus_y, requested.zoom, requested.mode)
+    return crop_box(source_size, target_size, effective)
 
 
 def render_classic_cover(
@@ -255,11 +263,12 @@ def render_classic_cover(
     if not isinstance(photo, CoverPhoto) or not isinstance(photo.image, Image.Image):
         raise ValueError("Forneça uma fotografia de capa válida.")
     photo.image.load()
-    effective_crop = _automatic_crop(photo.image, crop) if crop.mode == "automatico" else crop
-    source_box = crop_box(
+    faces = enquadramento.detect_faces(photo.image) if crop.mode == "automatico" else ()
+    source_box = resolve_classic_crop_box(
         photo.image.size,
         (layout.photo.width, layout.photo.height),
-        effective_crop,
+        crop,
+        faces,
     )
 
     canvas = Image.new("RGB", (width, height), (255, 255, 255))

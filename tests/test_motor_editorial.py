@@ -120,6 +120,69 @@ def test_classica_cover_selection_uses_the_approved_deterministic_priority(monke
     assert selection(photos, "missing") == "safe-best-0"
 
 
+def test_classica_selection_rejects_faces_cut_by_the_renderer_crop(tmp_path: Path, monkeypatch):
+    from provas import capa_classica as classic
+    from provas import capas
+    from provas.enquadramento import FaceBox, frame_for_mask
+
+    unsafe_path = tmp_path / "unsafe.jpg"
+    safe_path = tmp_path / "safe.jpg"
+    with Image.new("RGB", (2000, 1000), (190, 30, 30)) as image:
+        image.save(unsafe_path, quality=95)
+    with Image.new("RGB", (2000, 1000), (30, 180, 30)) as image:
+        image.save(safe_path, quality=95)
+
+    unsafe_faces = (
+        FaceBox(0.07, 0.20, 0.035, 0.10, 1.0),
+        FaceBox(0.55, 0.20, 0.18, 0.35, 1.0),
+    )
+    safe_faces = (FaceBox(0.40, 0.20, 0.18, 0.35, 1.0),)
+
+    def detected_faces(image):
+        red, green, _blue = image.getpixel((0, 0))
+        return unsafe_faces if red > green else safe_faces
+
+    real_frame_for_mask = frame_for_mask
+    monkeypatch.setattr(classic.enquadramento, "detect_faces", detected_faces)
+    monkeypatch.setattr(
+        capas,
+        "frame_for_mask",
+        lambda image, size, focus: real_frame_for_mask(
+            image, size, focus, detector=detected_faces
+        ),
+    )
+
+    with Image.open(unsafe_path) as source:
+        legacy_frame = real_frame_for_mask(
+            source, (1344, 825), None, detector=detected_faces
+        )
+        try:
+            assert legacy_frame.safe is True
+        finally:
+            legacy_frame.image.close()
+        weights = tuple(face.width * face.height * face.confidence for face in unsafe_faces)
+        total = sum(weights)
+        focus_x = sum(face.center[0] * weight for face, weight in zip(unsafe_faces, weights)) / total
+        focus_y = sum(face.center[1] * weight for face, weight in zip(unsafe_faces, weights)) / total
+        renderer_box = classic.crop_box(
+            source.size,
+            (1344, 825),
+            classic.ClassicCrop(focus_x, focus_y, mode="automatico"),
+        )
+    small_face = unsafe_faces[0]
+    assert small_face.x * 2000 < renderer_box.left
+
+    photos = (
+        PhotoInfo("unsafe", str(unsafe_path), "unsafe", 2000, 1000, 0, quality=1.0),
+        PhotoInfo("safe", str(safe_path), "safe", 2000, 1000, 1, quality=0.1),
+    )
+    assert capas.selecionar_foto_classica(photos, "") == "safe"
+
+    resolver = getattr(classic, "resolve_classic_crop_box", None)
+    assert callable(resolver)
+    assert resolver((2000, 1000), (1344, 825), classic.ClassicCrop(), unsafe_faces) == renderer_box
+
+
 def test_classica_cover_fields_participate_in_the_render_fingerprint(tmp_path: Path):
     from provas import motor
 
