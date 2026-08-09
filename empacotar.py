@@ -97,12 +97,17 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         if not any(presente(name) for name in minusculos):
             problemas.append(f"ativo obrigatório ausente: {rotulo}")
     proibidos = {"config.json", "logo.png"}
-    extensoes_fotograficas = {".jpg", ".jpeg", ".nef", ".cr2", ".arw", ".dng", ".orf", ".rw2"}
+    extensoes_de_imagem = {
+        ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".heic",
+        ".nef", ".cr2", ".arw", ".dng", ".orf", ".rw2",
+    }
     for name in minusculos:
         if Path(name).name in proibidos:
             problemas.append(f"dado de usuário incluído: {name}")
-        elif Path(name).suffix in extensoes_fotograficas:
-            problemas.append(f"fotografia incluída no pacote: {name}")
+        elif name.endswith(".provas.json"):
+            problemas.append(f"projeto de usuário incluído: {name}")
+        elif Path(name).suffix in extensoes_de_imagem:
+            problemas.append(f"fotografia ou logotipo incluído no pacote: {name}")
     return tuple(problemas)
 
 

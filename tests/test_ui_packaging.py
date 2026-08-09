@@ -58,9 +58,13 @@ def test_inspecao_do_zip_exige_ativos_e_rejeita_dados_do_usuario(tmp_path: Path)
     with zipfile.ZipFile(pacote, "a") as archive:
         archive.writestr("Fotolivro/config.json", b"privado")
         archive.writestr("Fotolivro/sessao.jpg", b"fotografia")
+        archive.writestr("Fotolivro/marca-cliente.png", b"logotipo")
+        archive.writestr("Fotolivro/cliente.provas.json", b"projeto")
     problemas = inspecionar_pacote(pacote)
     assert any("config.json" in problema for problema in problemas)
     assert any("sessao.jpg" in problema for problema in problemas)
+    assert any("marca-cliente.png" in problema for problema in problemas)
+    assert any("cliente.provas.json" in problema for problema in problemas)
 
 
 def test_packaging_removes_user_configuration_and_logo_but_keeps_application_files(tmp_path: Path):
