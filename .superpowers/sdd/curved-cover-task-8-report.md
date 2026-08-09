@@ -71,7 +71,8 @@ RED antes da correção:
 
 - logo ausente/corrompido influenciava a associação automática mesmo sem ser
   renderizado; um preflight raster alinhado ao renderer agora ativa a exclusão
-  facial somente para logo realmente carregável;
+  facial somente para logo realmente carregável. O loader/normalizador é único
+  também para raster opaco totalmente branco, que se torna alpha vazio;
 - a segurança do crop retangular não garantia a bbox facial dentro da curva;
   cada slot agora reutiliza sua máscara real e exige toda a bbox confiante em
   opacidade mínima 128. Sem candidata segura, o warning continua explícito.

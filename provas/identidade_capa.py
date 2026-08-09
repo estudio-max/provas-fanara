@@ -212,24 +212,17 @@ def _draw_identity_lines(
         cursor_y += heights[index] + gap
 
 
-def _prepare_logo(
-    path: str,
-    rect: PixelRect,
-    canvas: Image.Image,
-) -> tuple[Image.Image | None, tuple[CoverWarning, ...]]:
-    clean_path = path.strip()
-    if not clean_path or not os.path.isfile(clean_path):
-        return None, (CoverWarning("logo_ausente", _LOGO_MISSING),)
-    logo: Image.Image | None = None
+def _load_normalized_logo(path: str) -> Image.Image:
+    """Load, normalize and crop a visible raster logo or raise ``ValueError``."""
+    with Image.open(path) as opened:
+        transposed = ImageOps.exif_transpose(opened)
+        try:
+            logo = transposed.convert("RGBA")
+            logo.load()
+        finally:
+            if transposed is not opened:
+                transposed.close()
     try:
-        with Image.open(clean_path) as opened:
-            transposed = ImageOps.exif_transpose(opened)
-            try:
-                logo = transposed.convert("RGBA")
-                logo.load()
-            finally:
-                if transposed is not opened:
-                    transposed.close()
         with logo.getchannel("A") as alpha:
             opaque = alpha.getextrema()[0] == 255
         if opaque:
@@ -244,8 +237,23 @@ def _prepare_logo(
         if logo.width <= 0 or logo.height <= 0 or alpha_bounds is None:
             raise ValueError("empty logo")
         cropped = logo.crop(alpha_bounds)
+        cropped.load()
+        return cropped
+    finally:
         logo.close()
-        logo = cropped
+
+
+def _prepare_logo(
+    path: str,
+    rect: PixelRect,
+    canvas: Image.Image,
+) -> tuple[Image.Image | None, tuple[CoverWarning, ...]]:
+    clean_path = path.strip()
+    if not clean_path or not os.path.isfile(clean_path):
+        return None, (CoverWarning("logo_ausente", _LOGO_MISSING),)
+    logo: Image.Image | None = None
+    try:
+        logo = _load_normalized_logo(clean_path)
         contained = ImageOps.contain(
             logo,
             (rect.width, rect.height),
@@ -270,21 +278,15 @@ def logo_is_renderable(path: str) -> bool:
     clean_path = path.strip()
     if not clean_path or not os.path.isfile(clean_path):
         return False
+    logo: Image.Image | None = None
     try:
-        with Image.open(clean_path) as opened:
-            transposed = ImageOps.exif_transpose(opened)
-            try:
-                with transposed.convert("RGBA") as logo:
-                    logo.load()
-                    if logo.width <= 0 or logo.height <= 0:
-                        return False
-                    with logo.getchannel("A") as alpha:
-                        return alpha.getbbox() is not None
-            finally:
-                if transposed is not opened:
-                    transposed.close()
+        logo = _load_normalized_logo(clean_path)
+        return True
     except (OSError, SyntaxError, ValueError):
         return False
+    finally:
+        if logo is not None:
+            logo.close()
 
 
 def render_identity(

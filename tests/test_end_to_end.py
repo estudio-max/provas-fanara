@@ -543,7 +543,7 @@ def test_automatic_cover_avoids_logo_over_detected_face(tmp_path: Path, monkeypa
         clear.close()
 
 
-@pytest.mark.parametrize("logo_kind", ("ausente", "corrompido"))
+@pytest.mark.parametrize("logo_kind", ("ausente", "corrompido", "branco"))
 def test_unrenderable_logo_does_not_reorder_automatic_cover(
     tmp_path: Path, monkeypatch, logo_kind: str
 ):
@@ -554,6 +554,9 @@ def test_unrenderable_logo_does_not_reorder_automatic_cover(
     logo = tmp_path / "logo.png"
     if logo_kind == "corrompido":
         logo.write_bytes(b"nao e uma imagem")
+    elif logo_kind == "branco":
+        with Image.new("RGB", (120, 40), "white") as white_logo:
+            white_logo.save(logo)
     covered = Image.new("RGB", (200, 300), (210, 170, 140))
     clear = Image.new("RGB", (200, 300), (80, 110, 140))
 
