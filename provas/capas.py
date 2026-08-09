@@ -12,7 +12,7 @@ from .capa_curvas import layout_orbita, render_mask
 from .enquadramento import MIN_FACE_CONFIDENCE, FrameResult, frame_for_mask
 from .identidade_capa import CoverWarning, IdentityData, logo_is_renderable, render_identity
 
-COVER_STYLES = ("mosaico", "curvas_editoriais")
+COVER_STYLES = ("classica", "mosaico", "curvas_editoriais")
 ESTILOS = COVER_STYLES
 
 SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda lisa
@@ -124,7 +124,7 @@ def _faces_inside_curve_mask(frame: FrameResult, slot, mask: Image.Image) -> boo
 def validate_cover_style(value: str) -> str:
     """Return a supported cover style or explain the valid choices in PT-BR."""
     if value not in COVER_STYLES:
-        raise ValueError("Estilo de capa inválido. Use mosaico ou curvas_editoriais.")
+        raise ValueError("Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.")
     return value
 
 

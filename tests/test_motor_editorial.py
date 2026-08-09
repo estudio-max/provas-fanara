@@ -25,12 +25,23 @@ def test_config_editorial_defaults_and_tuple_normalization(tmp_path: Path):
     assert config.cover_ids == ("a", "b")
 
 
+def test_config_defaults_include_classic_cover_settings(tmp_path: Path):
+    from provas.motor import Config
+
+    config = Config(str(tmp_path))
+
+    assert config.estilo_capa == "classica"
+    assert config.foto_capa_id == ""
+    assert (config.capa_foco_x, config.capa_foco_y, config.capa_zoom) == (0.5, 0.5, 1.0)
+    assert config.capa_enquadramento == "automatico"
+
+
 def test_config_defaults_validate_unknown_cover_style_in_portuguese(tmp_path: Path):
     from provas.motor import Config
 
     with pytest.raises(
         ValueError,
-        match="Estilo de capa inválido. Use mosaico ou curvas_editoriais.",
+        match="Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.",
     ):
         Config(str(tmp_path), estilo_capa="desconhecido").com_padroes()
 

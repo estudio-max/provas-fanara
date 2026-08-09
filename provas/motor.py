@@ -64,7 +64,12 @@ class Config:
     cor_fundo: str = tema.FUNDO_PADRAO
     recursivo: bool = False
     capa_mosaico: bool = True
-    estilo_capa: str = "mosaico"
+    estilo_capa: str = "classica"
+    foto_capa_id: str = ""
+    capa_foco_x: float = 0.5
+    capa_foco_y: float = 0.5
+    capa_zoom: float = 1.0
+    capa_enquadramento: str = "automatico"
     chamada: str = "Escolha suas favoritas"
     limite: int = 0            # 0 = todas; útil para gerar uma amostra rápida
     modo: str = "prova"

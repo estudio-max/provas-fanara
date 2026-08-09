@@ -50,7 +50,7 @@ def test_save_and_load_round_trip_unicode_windows_metadata_without_image_bytes(t
     raw = destination.read_text(encoding="utf-8")
     payload = json.loads(raw)
 
-    assert payload["schema_version"] == PROJECT_SCHEMA_VERSION == 2
+    assert payload["schema_version"] == PROJECT_SCHEMA_VERSION == 3
     assert "Júlia" in raw
     assert "\\u00fa" not in raw
     assert "image_bytes" not in raw
@@ -80,7 +80,71 @@ def test_load_migrates_v1_project_to_default_cover_style_without_losing_identity
     assert migrated.config.estudio == "Estúdio Fanara"
     assert migrated.config.site == "fanara.example"
     assert migrated.config.logo == "C:\\identidade\\marca.png"
-    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == 3
+
+
+def test_new_projects_default_to_classic_cover(tmp_path: Path):
+    from provas.projeto import ProjectConfig
+
+    config = ProjectConfig(pasta=str(tmp_path))
+
+    assert config.estilo_capa == "classica"
+    assert config.foto_capa_id == ""
+    assert (config.capa_foco_x, config.capa_foco_y, config.capa_zoom) == (0.5, 0.5, 1.0)
+    assert config.capa_enquadramento == "automatico"
+
+
+def test_v2_project_keeps_mosaic_when_classic_fields_are_absent(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["schema_version"] = 2
+    payload["config"]["estilo_capa"] = "mosaico"
+    for field in (
+        "foto_capa_id", "capa_foco_x", "capa_foco_y", "capa_zoom", "capa_enquadramento",
+    ):
+        payload["config"].pop(field, None)
+    source = tmp_path / "v2.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated = projeto.load_project(source)
+
+    assert migrated.config.estilo_capa == "mosaico"
+    assert migrated.config.foto_capa_id == ""
+    assert migrated.config.cover_ids == state.config.cover_ids
+    assert migrated.plan == state.plan
+    assert migrated.previous_plan == state.previous_plan
+
+
+def test_v2_project_without_cover_style_migrates_to_mosaic(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["schema_version"] = 2
+    payload["config"].pop("estilo_capa")
+    source = tmp_path / "v2-sem-estilo.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated = projeto.load_project(source)
+
+    assert migrated.config.estilo_capa == "mosaico"
+
+
+def test_crop_values_are_normalized():
+    from provas.projeto import ProjectConfig
+
+    config = ProjectConfig(pasta="x", capa_foco_x=-2, capa_foco_y=4, capa_zoom=8)
+
+    assert (config.capa_foco_x, config.capa_foco_y, config.capa_zoom) == (0.0, 1.0, 2.5)
+
+
+def test_project_config_rejects_invalid_cover_framing():
+    from provas.projeto import ProjectConfig
+
+    with pytest.raises(ValueError, match="Enquadramento da capa inválido."):
+        ProjectConfig(pasta="x", capa_enquadramento="livre")
 
 
 def test_project_config_rejects_unknown_cover_style_in_portuguese(tmp_path: Path):
@@ -88,7 +152,7 @@ def test_project_config_rejects_unknown_cover_style_in_portuguese(tmp_path: Path
 
     with pytest.raises(
         ValueError,
-        match="Estilo de capa inválido. Use mosaico ou curvas_editoriais.",
+        match="Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.",
     ):
         ProjectConfig(pasta=str(tmp_path), estilo_capa="desconhecido")
 
@@ -126,7 +190,7 @@ def test_load_rejects_a_future_schema_in_portuguese(tmp_path: Path):
     from provas.projeto import ProjectSchemaError, load_project
 
     destination = tmp_path / "future.json"
-    destination.write_text(json.dumps({"schema_version": 3}), encoding="utf-8")
+    destination.write_text(json.dumps({"schema_version": 4}), encoding="utf-8")
 
     with pytest.raises(ProjectSchemaError, match="versão.*não é suportada"):
         load_project(destination)

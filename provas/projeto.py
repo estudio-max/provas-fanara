@@ -19,7 +19,7 @@ from .modelos import BookPlan, PagePlan, PhotoInfo
 from .motor import Config
 
 
-PROJECT_SCHEMA_VERSION = 2
+PROJECT_SCHEMA_VERSION = 3
 LONG_ALBUM_PAGE_LIMIT = 20
 LOW_QUALITY_THRESHOLD = 0.35
 
@@ -50,7 +50,12 @@ class ProjectConfig:
     cor_fundo: str = "#F6F0E8"
     recursivo: bool = False
     capa_mosaico: bool = True
-    estilo_capa: str = "mosaico"
+    estilo_capa: str = "classica"
+    foto_capa_id: str = ""
+    capa_foco_x: float = 0.5
+    capa_foco_y: float = 0.5
+    capa_zoom: float = 1.0
+    capa_enquadramento: str = "automatico"
     chamada: str = "Escolha suas favoritas"
     limite: int = 0
     modo: str = "prova"
@@ -60,6 +65,11 @@ class ProjectConfig:
     def __post_init__(self) -> None:
         object.__setattr__(self, "cover_ids", tuple(self.cover_ids))
         object.__setattr__(self, "estilo_capa", validate_cover_style(self.estilo_capa))
+        object.__setattr__(self, "capa_foco_x", min(1.0, max(0.0, float(self.capa_foco_x))))
+        object.__setattr__(self, "capa_foco_y", min(1.0, max(0.0, float(self.capa_foco_y))))
+        object.__setattr__(self, "capa_zoom", min(2.5, max(1.0, float(self.capa_zoom))))
+        if self.capa_enquadramento not in ("automatico", "manual"):
+            raise ValueError("Enquadramento da capa inválido.")
 
     @classmethod
     def from_motor_config(cls, config: Config) -> "ProjectConfig":
@@ -174,7 +184,7 @@ def _migrate_project(data: object) -> dict[str, object]:
     version = data.get("schema_version")
     if version == PROJECT_SCHEMA_VERSION:
         return dict(data)
-    if version != 1:
+    if version not in (1, 2):
         raise ProjectSchemaError(f"A versão do projeto {version!r} não é suportada.")
 
     migrated = dict(data)
@@ -182,9 +192,19 @@ def _migrate_project(data: object) -> dict[str, object]:
     if not isinstance(config, dict):
         raise ProjectSchemaError("Projeto inválido: metadados malformados.")
     migrated_config = dict(config)
-    migrated_config.setdefault("estilo_capa", "mosaico")
+    if version == 1:
+        migrated_config.setdefault("estilo_capa", "mosaico")
+        version = 2
+    if version == 2:
+        migrated_config.setdefault("estilo_capa", "mosaico")
+        migrated_config.setdefault("foto_capa_id", "")
+        migrated_config.setdefault("capa_foco_x", 0.5)
+        migrated_config.setdefault("capa_foco_y", 0.5)
+        migrated_config.setdefault("capa_zoom", 1.0)
+        migrated_config.setdefault("capa_enquadramento", "automatico")
+        version = 3
     migrated["config"] = migrated_config
-    migrated["schema_version"] = PROJECT_SCHEMA_VERSION
+    migrated["schema_version"] = version
     return migrated
 
 
