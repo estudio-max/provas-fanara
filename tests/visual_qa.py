@@ -12,6 +12,14 @@ from PIL import Image, ImageDraw
 CURVED_COUNTS = (1, 3, 5, 6, 9)
 CURVED_TONES = ("claros", "escuros", "mistos")
 CURVED_LOGOS = ("horizontal", "vertical", "ausente")
+CLASSIC_CASES = (
+    ("automatico-horizontal", "landscape", "automatico", 0.5, 0.5, 1.0, "MEMÓRIAS"),
+    ("automatico-vertical", "portrait", "automatico", 0.5, 0.5, 1.0, "MEMÓRIAS"),
+    ("manual-esquerda", "landscape", "manual", 0.18, 0.5, 1.5, "NOSSA HISTÓRIA"),
+    ("manual-direita", "landscape", "manual", 0.82, 0.5, 1.5, "NOSSA HISTÓRIA"),
+    ("zoom-100", "portrait", "manual", 0.5, 0.42, 1.0, "ÁLBUM DE FAMÍLIA"),
+    ("zoom-250", "portrait", "manual", 0.5, 0.42, 2.5, "MEMÓRIAS DE UMA TARDE"),
+)
 
 
 def render_pdf(
@@ -127,7 +135,7 @@ def _qa_logo(path: Path, orientation: str) -> None:
     image.close()
 
 
-def _build_overview(sheets: list[Path], output: Path) -> Path:
+def _build_overview(sheets: list[Path], output: Path, stem: str) -> Path:
     thumb_size = (300, 220)
     caption_height = 30
     columns = 5
@@ -151,7 +159,7 @@ def _build_overview(sheets: list[Path], output: Path) -> Path:
             fill=(24, 25, 27),
         )
         thumbnail.close()
-    path = output / "curvas-editoriais-overview.png"
+    path = output / f"{stem}-overview.png"
     overview.save(path, optimize=True)
     overview.close()
     return path
@@ -207,14 +215,64 @@ def build_curved_cases(output: Path, *, dpi: int = 120) -> tuple[Path, ...]:
                     pdf, dpi=dpi, contact_sheet=output / f"{stem}-contact-sheet.png"
                 )
                 sheets.append(sheet)
-    _build_overview(sheets, output)
+    _build_overview(sheets, output, "curvas-editoriais")
+    return tuple(sheets)
+
+
+def build_classic_cases(output: Path, *, dpi: int = 120) -> tuple[Path, ...]:
+    """Generate the approved single-photo classic-cover matrix."""
+    from provas import capa_classica, motor
+
+    output.mkdir(parents=True, exist_ok=True)
+    fixtures = output / "_fixtures"
+    fixtures.mkdir(exist_ok=True)
+    sheets: list[Path] = []
+    original_detector = capa_classica.enquadramento.detect_faces
+    capa_classica.enquadramento.detect_faces = _synthetic_face_detector
+    try:
+        for index, (stem, orientation, mode, focus_x, focus_y, zoom, title) in enumerate(
+            CLASSIC_CASES
+        ):
+            photos = fixtures / stem
+            photos.mkdir(exist_ok=True)
+            for photo_index in range(4):
+                photo = photos / f"CAPA_{photo_index + 1:02d}.jpg"
+                _qa_photo(photo, photo_index + index, "mistos")
+                with Image.open(photo) as opened:
+                    needs_rotation = (
+                        orientation == "landscape" and opened.height > opened.width
+                    ) or (
+                        orientation == "portrait" and opened.width > opened.height
+                    )
+                    if needs_rotation:
+                        landscape = opened.transpose(Image.Transpose.ROTATE_90)
+                        landscape.save(photo, "JPEG", quality=94, subsampling=0)
+                        landscape.close()
+            manual_id = str(sorted(photos.glob("*.jpg"))[0]) if mode == "manual" else ""
+            pdf = output / f"{stem}.pdf"
+            config = motor.Config(
+                str(photos), saida=str(pdf), titulo=title, estudio="ESTÚDIO FANARA",
+                estilo_capa="classica", foto_capa_id=manual_id,
+                capa_foco_x=focus_x, capa_foco_y=focus_y, capa_zoom=zoom,
+                capa_enquadramento=mode, modo="fotolivro", qualidade="leve",
+                semente=9100 + index,
+            )
+            analysis = motor.analisar_plano(config)
+            motor.exportar(config, analysis.plan)
+            _count, sheet = render_pdf(
+                pdf, dpi=dpi, contact_sheet=output / f"{stem}-contact-sheet.png"
+            )
+            sheets.append(sheet)
+    finally:
+        capa_classica.enquadramento.detect_faces = original_detector
+    _build_overview(sheets, output, "capa-classica")
     return tuple(sheets)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", type=Path, help="diretório que contém os PDFs E2E")
-    parser.add_argument("--case", choices=("curvas-editoriais",))
+    parser.add_argument("--case", choices=("curvas-editoriais", "capa-classica"))
     parser.add_argument("--dpi", type=int, default=120)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -224,6 +282,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--output é obrigatório para o caso curvas-editoriais")
         sheets = build_curved_cases(destination, dpi=args.dpi)
         print(f"Matriz curvas-editoriais: {len(sheets)} folhas -> {destination}")
+        return 0
+    if args.case == "capa-classica":
+        destination = args.output or args.root
+        if destination is None:
+            parser.error("--output é obrigatório para o caso capa-classica")
+        sheets = build_classic_cases(destination, dpi=args.dpi)
+        print(f"Matriz capa-classica: {len(sheets)} folhas -> {destination}")
         return 0
     if args.root is None:
         parser.error("informe o diretório que contém os PDFs E2E")

@@ -51,3 +51,18 @@ contidos; logotipos sem distorção; vazios intencionais equilibrados; cada foto
 usada uma única vez; e primeira página do PDF idêntica à prévia. Os dois modos
 continuam cobertos pela matriz E2E automatizada de quantidades `1..9`: prova
 com marca/nomes somente no miolo e fotolivro sem ambos.
+
+## Capa Clássica
+
+A matriz Clássica cobre foto horizontal e vertical, escolha automática,
+enquadramento manual à esquerda/direita, zoom 100%, 150% e 250%, além de título
+curto e acentuado. Reproduza as seis capas e a overview a 120 dpi com:
+
+```powershell
+python tests/visual_qa.py --case capa-classica --dpi 120 --output tmp/visual-qa/capa-classica
+```
+
+Aceite somente: fundo branco; margens laterais de 8%; título Bodoni contido;
+estúdio com tracking regular; fotografia sem área vazia ou distorção; rosto
+preservado no automático; foco/zoom distintos no manual; e primeira página do
+PDF idêntica à prévia.

@@ -393,6 +393,57 @@ def test_classica_switching_cover_style_keeps_internal_page_pixels(tmp_path: Pat
     assert internal_pages[0] == internal_pages[1] == internal_pages[2]
 
 
+@pytest.mark.parametrize("mode", ("prova", "fotolivro"))
+@pytest.mark.parametrize("orientation", ("portrait", "landscape"))
+@pytest.mark.parametrize("framing", ("automatico", "manual"))
+@pytest.mark.parametrize("title", ("MEMÓRIAS", "MEMÓRIAS DE UMA TARDE DE INVERNO"))
+def test_classic_cover_complete_matrix(
+    tmp_path: Path, mode: str, orientation: str, framing: str, title: str,
+):
+    session = tmp_path / "matriz-classica" / "fotos"
+    session.mkdir(parents=True)
+    for index in range(2):
+        _synthetic_image(
+            session / f"CAPA_{index + 1:02d}.jpg", index + 80, orientation,
+            detail=index == 0,
+        )
+    photos = tuple(sorted(session.glob("*.jpg")))
+    manual_id = str(photos[-1]) if framing == "manual" else ""
+    output = tmp_path / f"classica-{mode}-{orientation}-{framing}.pdf"
+    config = motor.Config(
+        str(session), saida=str(output), titulo=title, estudio="ESTÚDIO FANARA",
+        estilo_capa="classica", foto_capa_id=manual_id,
+        capa_foco_x=0.72, capa_foco_y=0.38, capa_zoom=1.5,
+        capa_enquadramento=framing, modo=mode, qualidade="leve", semente=9441,
+    )
+    analysis = motor.analisar_plano(config)
+    original_plan = analysis.plan
+
+    preview = motor.gerar_preview(config, original_plan, width=320)
+    result = motor.exportar(config, original_plan)
+    try:
+        assert analysis.plan == original_plan
+        assert config.foto_capa_id == manual_id
+        assert result.warnings == preview.warnings == ()
+        assert preview.classic_photo_id
+        if framing == "manual":
+            assert preview.classic_photo_id == manual_id
+        with pymupdf.open(output) as pdf:
+            assert pdf.page_count == len(original_plan.pages) + 1
+            assert math.isclose(pdf[0].rect.width, A4_LANDSCAPE[0], abs_tol=0.1)
+            assert math.isclose(pdf[0].rect.height, A4_LANDSCAPE[1], abs_tol=0.1)
+            assert len(pdf[0].get_images(full=True)) == 1
+            rendered = _render_at_width(pdf[0], 320)
+            try:
+                assert rendered.size == preview[0].size
+                assert rendered.tobytes() == preview[0].tobytes()
+            finally:
+                rendered.close()
+    finally:
+        for image in preview:
+            image.close()
+
+
 @pytest.mark.parametrize("count", range(1, 10))
 @pytest.mark.parametrize("mode", ("prova", "fotolivro"))
 def test_curved_cover_end_to_end(tmp_path: Path, count: int, mode: str):
@@ -651,7 +702,7 @@ def test_automatic_cover_avoids_logo_over_detected_face(tmp_path: Path, monkeypa
         clear.close()
 
 
-@pytest.mark.parametrize("logo_kind", ("ausente", "corrompido", "branco"))
+@pytest.mark.parametrize("logo_kind", ("ausente", "corrompido"))
 def test_unrenderable_logo_does_not_reorder_automatic_cover(
     tmp_path: Path, monkeypatch, logo_kind: str
 ):
@@ -662,9 +713,6 @@ def test_unrenderable_logo_does_not_reorder_automatic_cover(
     logo = tmp_path / "logo.png"
     if logo_kind == "corrompido":
         logo.write_bytes(b"nao e uma imagem")
-    elif logo_kind == "branco":
-        with Image.new("RGB", (120, 40), "white") as white_logo:
-            white_logo.save(logo)
     covered = Image.new("RGB", (200, 300), (210, 170, 140))
     clear = Image.new("RGB", (200, 300), (80, 110, 140))
 
@@ -690,6 +738,45 @@ def test_unrenderable_logo_does_not_reorder_automatic_cover(
         assert cover.used_photo_ids[0] == "primeira"
         expected = "logo_ausente" if logo_kind == "ausente" else "logo_ilegivel"
         assert [warning.code for warning in cover.warnings] == [expected]
+    finally:
+        cover.imagem.close()
+        covered.close()
+        clear.close()
+
+
+def test_opaque_white_logo_is_renderable_and_protects_its_cover_area(
+    tmp_path: Path, monkeypatch,
+):
+    from provas import capas, tema
+    from provas.enquadramento import CropRect, FaceBox, FrameResult
+    from provas.identidade_capa import IdentityData
+
+    logo = tmp_path / "logo-branco.png"
+    with Image.new("RGB", (120, 40), "white") as white_logo:
+        white_logo.save(logo)
+    covered = Image.new("RGB", (200, 300), (210, 170, 140))
+    clear = Image.new("RGB", (200, 300), (80, 110, 140))
+
+    def framed(image, target_size, _focus):
+        face = (
+            FaceBox(0.25, 0.08, 0.20, 0.15, 1.0)
+            if image is covered
+            else FaceBox(0.64, 0.30, 0.20, 0.20, 1.0)
+        )
+        return FrameResult(
+            image.resize(target_size), CropRect(0.0, 0.0, 1.0, 1.0), (face,), 1, True
+        )
+
+    monkeypatch.setattr(capas, "frame_for_mask", framed)
+    monkeypatch.setattr(capas, "_candidate_score", lambda *_args: (0,))
+    cover = capas.gerar_curvas_editoriais(
+        [capas.CoverPhoto("primeira", covered), capas.CoverPhoto("segunda", clear)],
+        1600, 1131, tema.paleta(),
+        IdentityData("Retratos", "Fanara", "fanara.com.br", str(logo)), seed=23,
+    )
+    try:
+        assert cover.used_photo_ids[0] == "segunda"
+        assert cover.warnings == ()
     finally:
         cover.imagem.close()
         covered.close()
@@ -884,6 +971,21 @@ def test_visual_qa_curved_case_builds_required_matrix(tmp_path: Path):
     }
     assert expected <= {path.name for path in tmp_path.glob("*-contact-sheet.png")}
     assert (tmp_path / "curvas-editoriais-overview.png").is_file()
+    assert all(path.stat().st_size > 0 for path in tmp_path.glob("*.png"))
+
+
+def test_visual_qa_classic_case_builds_required_matrix(tmp_path: Path):
+    completed = subprocess.run(
+        [
+            sys.executable, str(ROOT / "tests" / "visual_qa.py"),
+            "--case", "capa-classica", "--dpi", "120", "--output", str(tmp_path),
+        ],
+        cwd=ROOT, capture_output=True, text=True, timeout=120, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert len(tuple(tmp_path.glob("*-contact-sheet.png"))) == 6
+    assert (tmp_path / "capa-classica-overview.png").is_file()
     assert all(path.stat().st_size > 0 for path in tmp_path.glob("*.png"))
 
 

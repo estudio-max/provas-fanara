@@ -24,9 +24,12 @@ de PDF A4 paisagem. No pacote distribuído, extraia a pasta inteira e abra
 1. Clique em **Escolher pasta**.
 2. Clique em **Analisar fotografias** para gerar o plano e as prévias.
 3. Escolha **Prova para seleção** ou **Fotolivro limpo**.
-4. Opcionalmente use **Trocar fotos da capa** ou **Regenerar**; a última
-   regeneração pode ser desfeita.
-5. Use **Salvar projeto** para guardar o plano ou **Exportar PDF** para a
+4. Escolha a capa. Novos projetos usam **Clássica**: uma fotografia, título e
+   estúdio. Use **Trocar fotos da capa** para escolher a imagem e **Ajustar
+   enquadramento** para arrastar, aplicar zoom de 100–250% ou restaurar o foco
+   automático. Mosaico e Curvas editoriais continuam disponíveis.
+5. Opcionalmente use **Regenerar**; a última regeneração pode ser desfeita.
+6. Use **Salvar projeto** para guardar o plano ou **Exportar PDF** para a
    entrega final.
 
 O motor narrativo avalia orientação, nitidez, exposição, densidade e
@@ -59,6 +62,9 @@ Windows exclui `config.json` e `logo.png` locais.
 
 A detecção de rosto é executada localmente; nenhuma fotografia é enviada pela internet.
 Projetos v1 abrem como mosaico. Logotipo inválido é ignorado com aviso.
+Projetos novos usam Capa Clássica; a foto e o recorte escolhidos são preservados
+no `.provas.json`. O logotipo completo das capas mantém suas cores originais,
+sem conversão preto/branco dependente da fotografia de fundo.
 
 ## Linha de comando
 

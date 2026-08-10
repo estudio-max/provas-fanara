@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import os
+from pathlib import Path
 import platform
 import sys
 import tempfile
@@ -125,11 +126,10 @@ def diagnosticar_fontes() -> int:
 
 def diagnosticar_recursos() -> int:
     """Validate every tracked brand/font resource in source and frozen layouts."""
-    from provas import recursos
-
     problemas = 0
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
     for nome, esperado in RECURSOS_OFICIAIS.items():
-        path = recursos.caminho(nome)
+        path = base / nome
         try:
             atual = sha256(path.read_bytes()).hexdigest()
         except OSError as erro:
