@@ -298,16 +298,17 @@ class Documento:
             if self.modo != "prova" or not slot.caption.width or not slot.caption.height:
                 continue
             caption_rect = _points(slot.caption, self.tamanho)
-            page.draw_rect(caption_rect, color=None, fill=self.p.painel)
             font_size = 7.2 if caption_rect.width >= 150 else 6.2
             label = self.tipo.encaixar(
                 asset.label, NOME_SANS_MEDIO, font_size,
-                max(1.0, caption_rect.width - 8), 0.25,
+                max(1.0, image_rect.width - 8), 0.25,
             )
             baseline = min(caption_rect.y1 - 2.0, caption_rect.y0 + font_size + 2.0)
+            center_x = (image_rect.x0 + image_rect.x1) / 2
             self.tipo.escrever(
-                page, caption_rect.x0 + 4.0, baseline, label,
+                page, center_x, baseline, label,
                 NOME_SANS_MEDIO, font_size, self.p.apagado, 0.25,
+                "centro",
             )
         return page
 
@@ -371,16 +372,15 @@ class Documento:
 
         cartao = pymupdf.Rect(foto.x0 - tema.RESPIRO_CARTAO, foto.y0 - tema.RESPIRO_CARTAO,
                               foto.x1 + tema.RESPIRO_CARTAO, foto.y1 + altura_legenda)
-        pagina.draw_rect(cartao, color=None, fill=self.p.painel)
         pagina.insert_image(foto, stream=jpeg, keep_proportion=True)
         pagina.draw_rect(foto, color=self.p.moldura, width=0.5)
 
         if not rotulo:
             return
         tamanho = 7.2 if largura > 150 else 6.2
-        nome = self.tipo.encaixar(rotulo, NOME_SANS_MEDIO, tamanho, cartao.width - 10, 1.1)
+        nome = self.tipo.encaixar(rotulo, NOME_SANS_MEDIO, tamanho, foto.width - 8, 0.25)
         self.tipo.escrever(pagina, centro_x, cartao.y1 - 6.5, nome,
-                           NOME_SANS_MEDIO, tamanho, self.p.apagado, 1.1, "centro")
+                           NOME_SANS_MEDIO, tamanho, self.p.apagado, 0.25, "centro")
 
     # capa -----------------------------------------------------------------
     def capa(self, capa_jpeg: bytes, quantidade: int, chamada: str,

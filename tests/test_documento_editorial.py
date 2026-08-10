@@ -112,6 +112,107 @@ def test_proof_caption_is_ellipsized_inside_its_own_rectangle(tmp_path: Path, im
         assert info.label not in pdf[0].get_text()
 
 
+def test_proof_caption_is_centered_on_each_photo_without_a_filled_band(tmp_path: Path, image_factory):
+    from provas.documento import Documento, Tipografia
+
+    paths = (
+        image_factory("retrato.jpg", size=(200, 300), color=(220, 40, 40)),
+        image_factory("paisagem.jpg", size=(300, 200), color=(40, 80, 220)),
+    )
+    infos = tuple(_photo(path, index) for index, path in enumerate(paths))
+    page_plan = PagePlan(1, "pair-asymmetric-left", tuple(info.id for info in infos), "opening")
+    template = next(item for item in catalog() if item.id == "pair-asymmetric-left").resolve("prova")
+    doc = Documento("Ensaio", "", True, Tipografia(), None, modo="prova")
+    doc.render_page(page_plan, template, {info.id: info for info in infos})
+    output = tmp_path / "captions.pdf"
+    doc.salvar(str(output))
+
+    with pymupdf.open(output) as pdf:
+        page = pdf[0]
+        image_rects = [page.get_image_rects(image)[0] for image in page.get_images(full=True)]
+        for image_rect, slot in zip(image_rects, template.slots):
+            caption_rect = _point_rect(slot.caption, page.rect.width, page.rect.height)
+            caption_words = [
+                word for word in page.get_text("words") if pymupdf.Rect(word[:4]).intersects(caption_rect)
+            ]
+
+            assert caption_words
+            assert not any(
+                drawing.get("fill") is not None
+                and drawing["rect"] != page.rect
+                and drawing["rect"].intersects(caption_rect)
+                for drawing in page.get_drawings()
+            )
+            word_rect = pymupdf.Rect(*caption_words[0][:4])
+            assert (word_rect.x0 + word_rect.x1) / 2 == pytest.approx(
+                (image_rect.x0 + image_rect.x1) / 2, abs=0.75
+            )
+
+
+def test_proof_caption_is_centered_on_each_physical_photo(tmp_path: Path, image_factory):
+    from provas.documento import Documento, Tipografia
+
+    paths = (
+        image_factory("retrato.jpg", size=(200, 300), color=(220, 40, 40)),
+        image_factory("paisagem.jpg", size=(300, 200), color=(40, 80, 220)),
+    )
+    infos = tuple(_photo(path, index) for index, path in enumerate(paths))
+    page_plan = PagePlan(1, "pair-asymmetric-left", tuple(info.id for info in infos), "opening")
+    template = next(item for item in catalog() if item.id == "pair-asymmetric-left").resolve("prova")
+    doc = Documento("Ensaio", "", True, Tipografia(), None, modo="prova")
+    doc.render_page(page_plan, template, {info.id: info for info in infos})
+    output = tmp_path / "caption-centering.pdf"
+    doc.salvar(str(output))
+
+    with pymupdf.open(output) as pdf:
+        page = pdf[0]
+        image_rects = [page.get_image_rects(image)[0] for image in page.get_images(full=True)]
+        for image_rect, slot in zip(image_rects, template.slots):
+            caption_rect = _point_rect(slot.caption, page.rect.width, page.rect.height)
+            caption_words = [
+                word for word in page.get_text("words") if pymupdf.Rect(word[:4]).intersects(caption_rect)
+            ]
+
+            assert caption_words
+            word_rect = pymupdf.Rect(*caption_words[0][:4])
+            assert (word_rect.x0 + word_rect.x1) / 2 == pytest.approx(
+                (image_rect.x0 + image_rect.x1) / 2, abs=0.75
+            )
+
+
+def test_legacy_proof_caption_is_centered_on_its_photo_without_a_filled_band(tmp_path: Path, image_factory):
+    from provas.documento import Documento, Tipografia
+
+    path = image_factory("legado.jpg", size=(200, 300), color=(220, 40, 40))
+    info = _photo(path, 0)
+    doc = Documento("Ensaio", "", True, Tipografia(), None, modo="prova")
+    page = doc.nova_pagina()
+    cell = pymupdf.Rect(100, 80, 340, 420)
+    doc.cartao(page, cell, path.read_bytes(), info.width / info.height, info.label, 20)
+    output = tmp_path / "legacy-caption.pdf"
+    doc.salvar(str(output))
+
+    with pymupdf.open(output) as pdf:
+        page = pdf[0]
+        image_rect = page.get_image_rects(page.get_images(full=True)[0])[0]
+        caption_rect = pymupdf.Rect(image_rect.x0, image_rect.y1, image_rect.x1, cell.y1)
+        caption_words = [
+            word for word in page.get_text("words") if pymupdf.Rect(word[:4]).intersects(caption_rect)
+        ]
+
+        assert caption_words
+        assert not any(
+            drawing.get("fill") is not None
+            and drawing["rect"] != page.rect
+            and drawing["rect"].intersects(caption_rect)
+            for drawing in page.get_drawings()
+        )
+        word_rect = pymupdf.Rect(*caption_words[0][:4])
+        assert (word_rect.x0 + word_rect.x1) / 2 == pytest.approx(
+            (image_rect.x0 + image_rect.x1) / 2, abs=0.75
+        )
+
+
 def test_thumbnail_reuses_pdf_rendering_rules_and_cache(image_factory):
     from provas import preview
 
