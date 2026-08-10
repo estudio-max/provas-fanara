@@ -228,7 +228,7 @@ def test_sidebar_cover_api_emits_style_and_debounced_identity(qapp):
 
     assert styles == ["curvas_editoriais"]
     assert identities == []
-    deadline = time.perf_counter() + 0.5
+    deadline = time.perf_counter() + 1.2
     while not identities and time.perf_counter() < deadline:
         qapp.processEvents()
         time.sleep(0.01)
@@ -238,6 +238,23 @@ def test_sidebar_cover_api_emits_style_and_debounced_identity(qapp):
         "site": "fanara.com.br/ensaios",
         "logo": "marca.png",
     }]
+
+
+def test_cover_identity_waits_for_typing_pause_before_requesting_preview(qapp):
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+    identities: list[dict[str, str]] = []
+    sidebar.cover_identity_changed.connect(identities.append)
+
+    for partial_title in ("E", "En", "Ens"):
+        sidebar.title_edit.setText(partial_title)
+        QTest.qWait(300)
+
+    assert identities == []
+
+    QTest.qWait(850)
+    assert [identity["titulo"] for identity in identities] == ["Ens"]
 
 
 def test_switching_cover_style_rerenders_only_cover_and_preserves_album(
