@@ -747,6 +747,114 @@ def test_page_cycle_worker_reports_failures_in_portuguese(qapp, tmp_path: Path, 
     assert failures == ["Não foi possível atualizar a página: arquivo de imagem ilegível"]
 
 
+def test_page_cycle_worker_cancellation_wins_at_the_prepublication_boundary(qapp, tmp_path: Path, plan, monkeypatch):
+    from provas.ui.workers import PageCycleWorker
+
+    completed = []
+    cancelled = []
+    result = object()
+    worker = PageCycleWorker(
+        Config(str(tmp_path)), plan, 1, 420, operation=lambda *_args, **_kwargs: result,
+    )
+    original_is_cancelled = worker._is_cancelled
+    checks = 0
+
+    def cancel_immediately_before_publication() -> bool:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            worker.cancel()
+            return False
+        return original_is_cancelled()
+
+    monkeypatch.setattr(worker, "_is_cancelled", cancel_immediately_before_publication)
+    worker.completed.connect(completed.append)
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.run()
+
+    assert worker.cancel_event.is_set()
+    assert completed == []
+    assert cancelled == [True]
+
+
+def test_worker_emits_terminal_signal_after_releasing_its_terminal_lock(qapp, tmp_path: Path, plan):
+    from provas.ui.workers import PageCycleWorker
+
+    worker = PageCycleWorker(
+        Config(str(tmp_path)), plan, 1, 420, operation=lambda *_args, **_kwargs: object(),
+    )
+    lock_available = []
+
+    def observe_terminal_signal() -> None:
+        def attempt_lock() -> None:
+            acquired = worker._terminal_lock.acquire(timeout=0.1)
+            lock_available.append(acquired)
+            if acquired:
+                worker._terminal_lock.release()
+
+        observer = threading.Thread(target=attempt_lock)
+        observer.start()
+        observer.join(timeout=1)
+        assert not observer.is_alive()
+
+    worker.completed.connect(observe_terminal_signal)
+    worker.run()
+
+    assert lock_available == [True]
+
+
+def test_main_window_delegates_active_cancellation_to_workers_before_setting_shared_event(qapp):
+    from provas.ui import MainWindow
+
+    class ProbeWorker:
+        def __init__(self, event: threading.Event) -> None:
+            self.event = event
+            self.event_was_already_set = None
+
+        def cancel(self) -> None:
+            self.event_was_already_set = self.event.is_set()
+            self.event.set()
+
+    window = MainWindow()
+    event = threading.Event()
+    worker = ProbeWorker(event)
+    window._cancel_event = event
+    window._workers = {worker}
+
+    window.cancel_active_operation()
+
+    assert worker.event_was_already_set is False
+    assert event.is_set()
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    (
+        (ValueError("Thumbnail width must be positive"), "a largura da prévia deve ser maior que zero"),
+        (ValueError("Unknown template: legado"), "o layout desta página não é reconhecido"),
+        (ValueError("Unknown page number: 17"), "a página solicitada não existe no plano"),
+        (ValueError("Missing preview assets: imagem.jpg"), "faltam fotos necessárias para renderizar esta página"),
+    ),
+)
+def test_page_cycle_worker_translates_known_internal_errors_to_portuguese(
+    qapp, tmp_path: Path, plan, error: ValueError, expected: str,
+):
+    from provas.ui.workers import PageCycleWorker
+
+    failures = []
+    worker = PageCycleWorker(
+        Config(str(tmp_path)), plan, 1, 420,
+        operation=lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    worker.failed.connect(failures.append)
+    worker.run()
+
+    assert failures == [f"Não foi possível atualizar a página: {expected}."]
+    assert "Thumbnail width" not in failures[0]
+    assert "Unknown template" not in failures[0]
+
+
 def test_resize_hides_diagnostics_before_sacrificing_preview(qapp):
     from provas.ui import MainWindow
 

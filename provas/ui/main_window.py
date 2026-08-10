@@ -384,9 +384,11 @@ class MainWindow(QMainWindow):
     def cancel_active_operation(self) -> None:
         if self._cancel_event is None:
             return
-        self._cancel_event.set()
-        for worker in tuple(self._workers):
+        workers = tuple(self._workers)
+        for worker in workers:
             worker.cancel()
+        if not workers:
+            self._cancel_event.set()
         self.sidebar.cancel_button.setEnabled(False)
         self.set_status("Cancelamento solicitado. Finalizando a etapa atual…", "loading")
 
@@ -906,10 +908,11 @@ class MainWindow(QMainWindow):
     def request_shutdown(self) -> None:
         """Request cooperative cancellation while leaving Qt's event loop responsive."""
         self._closing = True
-        if self._cancel_event is not None:
-            self._cancel_event.set()
-        for worker in tuple(self._workers):
+        workers = tuple(self._workers)
+        for worker in workers:
             worker.cancel()
+        if self._cancel_event is not None and not workers:
+            self._cancel_event.set()
         for thread in tuple(self._threads):
             thread.requestInterruption()
 
