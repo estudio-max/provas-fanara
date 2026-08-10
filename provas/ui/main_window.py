@@ -23,10 +23,12 @@ from PySide6.QtWidgets import (
 )
 
 from ..capas import validate_cover_style
+from ..capa_classica import ClassicCrop
 from ..modelos import BookPlan, PhotoInfo
 from ..motor import Config, PlanAnalysisResult, Resultado
 from ..projeto import ProjectSchemaError, ProjectState, load_project, save_project, undo_regeneration
 from .cover_dialog import CoverDialog
+from .crop_dialog import CropDialog
 from .diagnostics import DiagnosticsPanel
 from .preview_grid import PreviewGrid
 from .sidebar import WorkflowSidebar
@@ -59,6 +61,8 @@ class MainWindow(QMainWindow):
         self._completion: Callable[[object], None] | None = None
         self._closing = False
         self._analysis_failures: tuple[tuple[str, str], ...] = ()
+        self._cover_dialog: CoverDialog | None = None
+        self._crop_dialog: CropDialog | None = None
 
         self._build()
         self._connect()
@@ -149,6 +153,7 @@ class MainWindow(QMainWindow):
         self.sidebar.cover_style_changed.connect(self.set_cover_style)
         self.sidebar.cover_identity_changed.connect(self.set_cover_identity)
         self.sidebar.cover_requested.connect(self.open_cover_dialog)
+        self.sidebar.crop_requested.connect(self.open_crop_dialog)
         self.sidebar.cancel_requested.connect(self.cancel_active_operation)
         self.preview_grid.regenerate_requested.connect(self.request_regeneration)
         self.preview_grid.undo_requested.connect(self.undo_regeneration)
@@ -528,16 +533,33 @@ class MainWindow(QMainWindow):
             self.request_preview()
 
     def open_cover_dialog(self) -> None:
-        if self.project_state is None:
+        if self.project_state is None or self.is_busy:
             return
-        selected = self.project_state.plan.cover_photo_ids
         all_ids = tuple(
-            dict.fromkeys(photo_id for page in self.project_state.plan.pages for photo_id in page.photo_ids)
+            dict.fromkeys(
+                (
+                    *self.project_state.photo_paths,
+                    *(photo_id for page in self.project_state.plan.pages for photo_id in page.photo_ids),
+                )
+            )
+        )
+        classic = self.project_state.config.estilo_capa == "classica"
+        selected = (
+            (self.project_state.config.foto_capa_id,)
+            if classic and self.project_state.config.foto_capa_id
+            else self.project_state.plan.cover_photo_ids
         )
         remaining = tuple(photo_id for photo_id in all_ids if photo_id not in selected)
-        dialog = CoverDialog(selected, remaining, self)
+        dialog = CoverDialog(selected, remaining, self, single_selection=classic)
         dialog.replacement_requested.connect(self._cover_replaced)
+        dialog.single_photo_selected.connect(self.set_classic_cover_photo)
+        dialog.finished.connect(lambda _result: self._release_cover_dialog(dialog))
+        self._cover_dialog = dialog
         dialog.open()
+
+    def _release_cover_dialog(self, dialog: CoverDialog) -> None:
+        if self._cover_dialog is dialog:
+            self._cover_dialog = None
 
     def _cover_replaced(self, slot: int, photo_id: str) -> None:
         self.replace_cover_photo(slot, photo_id)
@@ -570,6 +592,116 @@ class MainWindow(QMainWindow):
         self.previews = ()
         self.set_status("Foto da capa substituída. A posição foi preservada.", "success")
         self._sync_actions()
+
+    def set_classic_cover_photo(self, photo_id: str) -> None:
+        """Persist one classic-cover photo without changing the multi-photo cover."""
+        if self.project_state is None:
+            raise ValueError("Analise as fotografias antes de alterar a capa.")
+        available = {
+            *self.project_state.photo_paths,
+            *(photo for page in self.project_state.plan.pages for photo in page.photo_ids),
+        }
+        if photo_id not in available:
+            raise ValueError("A fotografia escolhida não pertence a este projeto.")
+        config = replace(
+            self.project_state.config,
+            foto_capa_id=photo_id,
+            capa_foco_x=0.5,
+            capa_foco_y=0.5,
+            capa_zoom=1.0,
+            capa_enquadramento="automatico",
+        )
+        self.project_state = replace(self.project_state, config=config)
+        self.previews = ()
+        self.set_status(
+            "Fotografia da Capa Clássica escolhida. Preparando a prévia.", "success"
+        )
+        self._sync_actions()
+        self.request_preview()
+
+    def _classic_crop_photo_path(self) -> str:
+        if self.project_state is None:
+            return ""
+        config = self.project_state.config
+        candidates = tuple(
+            dict.fromkeys(
+                (
+                    config.foto_capa_id,
+                    *self.project_state.plan.cover_photo_ids,
+                    *self.project_state.photo_paths,
+                    *(photo for page in self.project_state.plan.pages for photo in page.photo_ids),
+                )
+            )
+        )
+        return next((path for path in candidates if path and os.path.isfile(path)), "")
+
+    def open_crop_dialog(self) -> None:
+        if (
+            self.project_state is None
+            or self.is_busy
+            or self.project_state.config.estilo_capa != "classica"
+        ):
+            return
+        photo_path = self._classic_crop_photo_path()
+        if not photo_path:
+            self.set_status(
+                "A fotografia da Capa Clássica não está disponível. Escolha outra fotografia.",
+                "error",
+            )
+            return
+        config = self.project_state.config
+        value = ClassicCrop(
+            config.capa_foco_x,
+            config.capa_foco_y,
+            config.capa_zoom,
+            config.capa_enquadramento,
+        )
+        try:
+            dialog = CropDialog(photo_path, value, self)
+        except ValueError as exc:
+            self.set_status(str(exc), "error")
+            return
+        dialog.applied.connect(
+            lambda focus_x, focus_y, zoom: self.set_classic_crop(
+                focus_x,
+                focus_y,
+                zoom,
+                mode=dialog.value.mode,
+            )
+        )
+        dialog.finished.connect(lambda _result: self._release_crop_dialog(dialog))
+        self._crop_dialog = dialog
+        dialog.open()
+
+    def _release_crop_dialog(self, dialog: CropDialog) -> None:
+        if self._crop_dialog is dialog:
+            self._crop_dialog = None
+
+    def set_classic_crop(
+        self,
+        focus_x: float,
+        focus_y: float,
+        zoom: float,
+        *,
+        mode: str = "manual",
+    ) -> None:
+        """Persist only classic crop fields and render the unchanged plan once."""
+        if self.project_state is None:
+            raise ValueError("Analise as fotografias antes de ajustar a capa.")
+        if mode not in {"automatico", "manual"}:
+            raise ValueError("Enquadramento da capa inválido.")
+        config = replace(
+            self.project_state.config,
+            capa_foco_x=focus_x,
+            capa_foco_y=focus_y,
+            capa_zoom=zoom,
+            capa_enquadramento=mode,
+        )
+        self.project_state = replace(self.project_state, config=config)
+        self.previews = ()
+        self.set_status("Enquadramento da Capa Clássica atualizado.", "success")
+        self._sync_actions()
+        self.request_preview()
 
     def export_dialog(self) -> None:
         if self.project_state is None or not self.previews or self.is_busy:

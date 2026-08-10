@@ -11,9 +11,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QLineEdit
+from PySide6.QtTest import QTest
 
 from provas.modelos import BookPlan, PagePlan
 from provas.motor import Config, Resultado
@@ -162,16 +163,18 @@ def test_open_project_dialog_is_accessible_and_uses_project_file_filter(
     assert window.project_state is not None
 
 
-def test_sidebar_exposes_two_cover_styles_and_accessible_identity_fields(qapp):
+def test_sidebar_exposes_three_cover_styles_and_accessible_identity_fields(qapp):
     from provas.ui.sidebar import WorkflowSidebar
 
     sidebar = WorkflowSidebar()
 
     assert [sidebar.cover_style.itemData(index) for index in range(sidebar.cover_style.count())] == [
+        "classica",
         "mosaico",
         "curvas_editoriais",
     ]
     assert [sidebar.cover_style.itemText(index) for index in range(sidebar.cover_style.count())] == [
+        "Clássica",
         "Mosaico editorial",
         "Curvas editoriais",
     ]
@@ -180,7 +183,27 @@ def test_sidebar_exposes_two_cover_styles_and_accessible_identity_fields(qapp):
     assert sidebar.site_edit.accessibleName() == "Site do fotógrafo ou estúdio"
     assert sidebar.logo_choose_button.accessibleName() == "Escolher logotipo da capa"
     assert sidebar.logo_remove_button.accessibleName() == "Remover logotipo da capa"
+    assert sidebar.crop_button.accessibleName() == "Ajustar enquadramento"
     assert all(edit.minimumHeight() >= 36 for edit in sidebar.findChildren(QLineEdit))
+
+
+def test_classic_crop_action_requires_ready_classic_project(qapp):
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+    assert not sidebar.crop_button.isEnabled()
+
+    sidebar.set_cover_ready(True)
+    assert sidebar.crop_button.isEnabled()
+
+    sidebar.set_cover_style("mosaico")
+    assert not sidebar.crop_button.isEnabled()
+
+    sidebar.set_cover_style("classica")
+    assert sidebar.crop_button.isEnabled()
+
+    sidebar.set_busy(True, "Preparando prévia")
+    assert not sidebar.crop_button.isEnabled()
 
 
 def test_sidebar_cover_api_emits_style_and_debounced_identity(qapp):
@@ -479,6 +502,67 @@ def test_cover_replacement_keeps_slot_order_and_survives_regeneration(qapp, tmp_
     assert window.project_state.plan.cover_photo_ids == (replacement, plan.cover_photo_ids[1])
 
 
+def test_classic_cover_photo_is_independent_and_requests_one_preview(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    replacement = plan.pages[-1].photo_ids[1]
+    window.replace_cover_photo(0, plan.pages[-1].photo_ids[-1])
+    previous_plan = replace(plan, seed=plan.seed - 1)
+    window.project_state = replace(window.project_state, previous_plan=previous_plan)
+    before = window.project_state
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.set_classic_cover_photo(replacement)
+
+    assert window.project_state is not None and before is not None
+    assert window.project_state.config.foto_capa_id == replacement
+    assert window.project_state.config.cover_ids == before.config.cover_ids
+    assert window.project_state.plan == before.plan
+    assert window.project_state.previous_plan == previous_plan
+    assert window.project_state.config.semente == before.config.semente
+    assert window.project_state.config.capa_enquadramento == "automatico"
+    assert preview_requests == [True]
+
+
+def test_classic_crop_changes_only_cover_config_and_requests_one_preview(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    window.project_state = replace(
+        window.project_state,
+        previous_plan=replace(plan, seed=plan.seed - 1),
+    )
+    before = window.project_state
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.set_classic_crop(0.22, 0.78, 1.85)
+
+    assert window.project_state is not None and before is not None
+    assert (
+        window.project_state.config.capa_foco_x,
+        window.project_state.config.capa_foco_y,
+        window.project_state.config.capa_zoom,
+        window.project_state.config.capa_enquadramento,
+    ) == (0.22, 0.78, 1.85, "manual")
+    assert window.project_state.plan == before.plan
+    assert window.project_state.previous_plan == before.previous_plan
+    assert window.project_state.config.semente == before.config.semente
+    assert window.project_state.config.cover_ids == before.config.cover_ids
+    assert window.previews == ()
+    assert preview_requests == [True]
+
+
 def test_regeneration_can_be_undone_and_preserves_scroll(qapp, tmp_path: Path, plan):
     from provas.ui import MainWindow
 
@@ -578,6 +662,7 @@ def test_workers_publish_uniform_signals_and_honor_cancellation(qapp, tmp_path: 
     worker = AnalysisWorker(Config(str(tmp_path)), operation=analyze)
     worker.progress.connect(lambda percent, message: progress.append((percent, message)))
     worker.completed.connect(completed.append)
+    worker.run()
     worker.run()
 
     assert progress == [(50, "Analisando fotografia")]
@@ -811,6 +896,104 @@ def test_cover_dialog_loads_visible_photo_thumbnails(qapp, image_factory):
     assert not dialog.selected_list.item(0).icon().isNull()
     assert not dialog.remaining_list.item(0).icon().isNull()
     dialog.close()
+
+
+def test_cover_dialog_single_selection_needs_no_cover_slot(qapp, image_factory):
+    from provas.ui import CoverDialog
+
+    current = str(image_factory("atual.jpg", size=(420, 280)))
+    alternatives = tuple(
+        str(image_factory(f"alternativa-{index}.jpg", size=(420, 280))) for index in range(2)
+    )
+    dialog = CoverDialog((current,), alternatives, single_selection=True)
+    selected: list[str] = []
+    dialog.single_photo_selected.connect(selected.append)
+    dialog.show()
+    qapp.processEvents()
+
+    assert "Escolha a fotografia da capa" in dialog.intro_label.text()
+    assert dialog.selected_list.isHidden()
+    dialog.remaining_list.setCurrentRow(dialog.remaining_list.count() - 1)
+    assert dialog.replace_button.isEnabled()
+    dialog.replace_button.click()
+    dialog.replace_button.click()
+
+    assert selected == [alternatives[-1]]
+
+
+def _drag_crop(canvas, dx: int, dy: int, qapp) -> None:
+    start = canvas.rect().center()
+    end = start + QPoint(dx, dy)
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end, delay=5)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qapp.processEvents()
+
+
+def test_crop_cancel_keeps_committed_value_transactional(qapp, image_factory):
+    from provas.capa_classica import ClassicCrop
+    from provas.ui.crop_dialog import CropDialog
+
+    path = str(image_factory("crop-cancel.jpg", size=(1200, 800)))
+    before = ClassicCrop(0.5, 0.5, 1.35, "manual")
+    dialog = CropDialog(path, before)
+    applied: list[tuple[float, float, float]] = []
+    dialog.applied.connect(lambda x, y, zoom: applied.append((x, y, zoom)))
+    dialog.show()
+    qapp.processEvents()
+
+    _drag_crop(dialog.canvas, 80, -30, qapp)
+    assert dialog.value != before
+    dialog.reject()
+
+    assert dialog.committed_value == before
+    assert applied == []
+
+
+def test_crop_apply_emits_once_and_commits_bounded_draft(qapp, image_factory):
+    from provas.capa_classica import ClassicCrop, classic_photo_target, crop_box
+    from provas.ui.crop_dialog import CropDialog
+
+    path = str(image_factory("crop-apply.jpg", size=(900, 1400)))
+    before = ClassicCrop()
+    dialog = CropDialog(path, before)
+    applied: list[tuple[float, float, float]] = []
+    dialog.applied.connect(lambda x, y, zoom: applied.append((x, y, zoom)))
+    dialog.show()
+    qapp.processEvents()
+
+    dialog.zoom_slider.setValue(250)
+    _drag_crop(dialog.canvas, -500, 500, qapp)
+    box = crop_box(dialog.canvas.source_size, classic_photo_target(), dialog.value)
+    width, height = dialog.canvas.source_size
+    assert 0 <= box.left < box.right <= width
+    assert 0 <= box.top < box.bottom <= height
+    dialog.apply_button.click()
+    dialog.apply_button.click()
+
+    assert len(applied) == 1
+    assert applied[0][2] == 2.5
+    assert dialog.committed_value == dialog.value
+
+
+def test_crop_automatic_reset_is_local_until_apply(qapp, image_factory):
+    from provas.capa_classica import ClassicCrop
+    from provas.ui.crop_dialog import CropDialog
+
+    path = str(image_factory("crop-reset.jpg", size=(1200, 800)))
+    before = ClassicCrop(0.25, 0.7, 2.0, "manual")
+    dialog = CropDialog(path, before)
+    dialog.show()
+    qapp.processEvents()
+
+    dialog.automatic_button.click()
+
+    assert dialog.value == ClassicCrop(0.5, 0.5, 1.0, "automatico")
+    assert dialog.committed_value == before
+    assert dialog.zoom_slider.value() == 100
+    assert dialog.zoom_label.text() == "100%"
+    dialog.reject()
+    assert dialog.committed_value == before
 
 
 def test_close_requests_cancellation_without_waiting_for_worker(qapp):

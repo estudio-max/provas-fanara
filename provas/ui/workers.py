@@ -5,7 +5,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from .. import motor
 from ..modelos import BookPlan
@@ -23,12 +23,18 @@ class EditorialWorker(QObject):
     def __init__(self, cancel_event: threading.Event | None = None) -> None:
         super().__init__()
         self.cancel_event = cancel_event or threading.Event()
+        self._run_lock = threading.Lock()
+        self._started = False
 
     def cancel(self) -> None:
         self.cancel_event.set()
 
+    def _is_cancelled(self) -> bool:
+        thread = QThread.currentThread()
+        return self.cancel_event.is_set() or thread.isInterruptionRequested()
+
     def _progress(self, done: int, total: int, message: str) -> None:
-        if self.cancel_event.is_set():
+        if self._is_cancelled():
             raise motor.Cancelado()
         percent = round(max(0, done) * 100 / max(1, total))
         self.progress.emit(max(0, min(100, percent)), str(message))
@@ -38,7 +44,11 @@ class EditorialWorker(QObject):
 
     @Slot()
     def run(self) -> None:
-        if self.cancel_event.is_set():
+        with self._run_lock:
+            if self._started:
+                return
+            self._started = True
+        if self._is_cancelled():
             self.cancelled.emit()
             return
         try:
@@ -48,7 +58,7 @@ class EditorialWorker(QObject):
         except Exception as exc:  # the controller turns details into an actionable banner
             self.failed.emit(str(exc) or exc.__class__.__name__)
         else:
-            if self.cancel_event.is_set():
+            if self._is_cancelled():
                 self.cancelled.emit()
             else:
                 self.completed.emit(result)

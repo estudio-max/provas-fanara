@@ -317,8 +317,55 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
     background: none;
 }
 
-QDialog#coverDialog, QDialog#coverDialog QWidget {
+QDialog#coverDialog, QDialog#coverDialog QWidget,
+QDialog#cropDialog, QDialog#cropDialog QWidget {
     background: #191A1F;
+}
+
+QWidget#cropCanvas {
+    background: #111215;
+    border: 1px solid #383941;
+    border-radius: 4px;
+}
+
+QSlider#cropZoom {
+    min-height: 36px;
+}
+
+QSlider#cropZoom::groove:horizontal {
+    height: 6px;
+    background: #2A2B31;
+    border-radius: 3px;
+}
+
+QSlider#cropZoom::sub-page:horizontal {
+    background: #D84060;
+    border-radius: 3px;
+}
+
+QSlider#cropZoom::handle:horizontal {
+    width: 18px;
+    height: 18px;
+    margin: -6px 0;
+    background: #F1F1F3;
+    border: 2px solid #C53252;
+    border-radius: 10px;
+}
+
+QSlider#cropZoom:focus::handle:horizontal {
+    border: 2px solid #E04C6B;
+}
+
+QPushButton#dialogApplyButton {
+    border-color: #C53252;
+    background: #492531;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+QPushButton#dialogApplyButton:hover {
+    border-color: #E04C6B;
+    background: #5A2938;
 }
 
 QListWidget {

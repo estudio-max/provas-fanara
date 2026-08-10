@@ -75,32 +75,47 @@ class ThumbnailListWidget(QListWidget):
 
 class CoverDialog(QDialog):
     replacement_requested = Signal(int, str)
+    single_photo_selected = Signal(str)
 
     def __init__(
         self,
         selected: Iterable[str],
         remaining: Iterable[str],
         parent: QWidget | None = None,
+        *,
+        single_selection: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("coverDialog")
-        self.setWindowTitle("Trocar fotos da capa")
+        self.single_selection = bool(single_selection)
+        self.setWindowTitle(
+            "Escolher foto da capa" if self.single_selection else "Trocar fotos da capa"
+        )
         self.setModal(True)
         self.resize(760, 500)
         self._selected = tuple(selected)
-        self._remaining = tuple(remaining)
+        self._remaining = (
+            tuple(dict.fromkeys((*self._selected, *tuple(remaining))))
+            if self.single_selection
+            else tuple(remaining)
+        )
+        self._submitted = False
         self._build()
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(16)
-        intro = QLabel(
-            "Escolha uma posição da capa e uma fotografia disponível. "
-            "A substituição mantém a ordem dos demais espaços."
+        self.intro_label = QLabel(
+            "Escolha a fotografia da capa. A seleção é independente dos outros estilos."
+            if self.single_selection
+            else (
+                "Escolha uma posição da capa e uma fotografia disponível. "
+                "A substituição mantém a ordem dos demais espaços."
+            )
         )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        self.intro_label.setWordWrap(True)
+        root.addWidget(self.intro_label)
 
         columns = QHBoxLayout()
         columns.setSpacing(16)
@@ -114,19 +129,31 @@ class CoverDialog(QDialog):
             item = self.selected_list.item(index)
             item.setText(f"{index + 1}. {item.text()}")
         selected_column.addWidget(self.selected_list)
-        columns.addLayout(selected_column, 1)
+        if self.single_selection:
+            selected_title.hide()
+            self.selected_list.hide()
+        else:
+            columns.addLayout(selected_column, 1)
 
         remaining_column = QVBoxLayout()
-        remaining_title = QLabel("Fotografias disponíveis")
+        remaining_title = QLabel(
+            "Fotografias do projeto" if self.single_selection else "Fotografias disponíveis"
+        )
         remaining_title.setObjectName("sectionTitle")
         remaining_column.addWidget(remaining_title)
         self.remaining_list = ThumbnailListWidget(self._remaining)
-        self.remaining_list.setAccessibleName("Fotografias disponíveis para substituição")
+        self.remaining_list.setAccessibleName(
+            "Fotografias disponíveis para a capa"
+            if self.single_selection
+            else "Fotografias disponíveis para substituição"
+        )
         remaining_column.addWidget(self.remaining_list)
         columns.addLayout(remaining_column, 1)
         root.addLayout(columns, 1)
 
-        self.replace_button = QPushButton("Substituir fotografia")
+        self.replace_button = QPushButton(
+            "Escolher fotografia" if self.single_selection else "Substituir fotografia"
+        )
         self.replace_button.setObjectName("primaryButton")
         self.replace_button.setEnabled(False)
         self.replace_button.clicked.connect(self._replace)
@@ -141,13 +168,24 @@ class CoverDialog(QDialog):
 
     def _update_action(self) -> None:
         self.replace_button.setEnabled(
-            self.selected_list.currentRow() >= 0 and self.remaining_list.currentRow() >= 0
+            self.remaining_list.currentRow() >= 0
+            and (self.single_selection or self.selected_list.currentRow() >= 0)
         )
 
     def _replace(self) -> None:
-        slot = self.selected_list.currentRow()
+        if self._submitted:
+            return
         source = self.remaining_list.currentRow()
-        if slot < 0 or source < 0:
+        if source < 0:
+            return
+        self._submitted = True
+        self.replace_button.setEnabled(False)
+        if self.single_selection:
+            self.single_photo_selected.emit(self._remaining[source])
+            self.accept()
+            return
+        slot = self.selected_list.currentRow()
+        if slot < 0:
             return
         self.replacement_requested.emit(slot, self._remaining[source])
         self.accept()

@@ -26,6 +26,7 @@ class WorkflowSidebar(QFrame):
     analysis_requested = Signal()
     mode_changed = Signal(str)
     cover_requested = Signal()
+    crop_requested = Signal()
     cover_style_changed = Signal(str)
     cover_identity_changed = Signal(dict)
     cancel_requested = Signal()
@@ -118,6 +119,7 @@ class WorkflowSidebar(QFrame):
         layout.addSpacing(6)
         self.cover_style = QComboBox()
         self.cover_style.setAccessibleName("Estilo da capa")
+        self.cover_style.addItem("Clássica", "classica")
         self.cover_style.addItem("Mosaico editorial", "mosaico")
         self.cover_style.addItem("Curvas editoriais", "curvas_editoriais")
         self.cover_style.currentIndexChanged.connect(self._emit_cover_style)
@@ -172,16 +174,19 @@ class WorkflowSidebar(QFrame):
             edit.textChanged.connect(lambda _text: self._identity_timer.start())
 
         layout.addSpacing(16)
-        cover_copy = QLabel("Revise a seleção automática sem alterar a ordem do álbum.")
-        cover_copy.setObjectName("mutedText")
-        cover_copy.setWordWrap(True)
-        layout.addWidget(cover_copy)
-        layout.addSpacing(12)
 
         self.cover_button = QPushButton("Trocar fotos da capa")
         self.cover_button.setEnabled(False)
         self.cover_button.clicked.connect(self.cover_requested)
         layout.addWidget(self.cover_button)
+
+        layout.addSpacing(8)
+        self.crop_button = QPushButton("Ajustar enquadramento")
+        self.crop_button.setAccessibleName("Ajustar enquadramento")
+        self.crop_button.setToolTip("Reposicionar e ampliar a fotografia da Capa Clássica")
+        self.crop_button.setEnabled(False)
+        self.crop_button.clicked.connect(self.crop_requested)
+        layout.addWidget(self.crop_button)
 
         layout.addStretch(1)
 
@@ -219,6 +224,7 @@ class WorkflowSidebar(QFrame):
         return edit
 
     def _emit_cover_style(self) -> None:
+        self._update_cover_actions()
         self.cover_style_changed.emit(str(self.cover_style.currentData()))
 
     def _identity_payload(self) -> dict[str, str]:
@@ -257,6 +263,7 @@ class WorkflowSidebar(QFrame):
         blocked = self.cover_style.blockSignals(True)
         self.cover_style.setCurrentIndex(index)
         self.cover_style.blockSignals(blocked)
+        self._update_cover_actions()
         if emit:
             self.cover_style_changed.emit(style)
 
@@ -312,6 +319,11 @@ class WorkflowSidebar(QFrame):
         self.proof_radio.setEnabled(not busy)
         self.book_radio.setEnabled(not busy)
         self.cover_button.setEnabled(not busy and self.cover_button.property("ready") is True)
+        self.crop_button.setEnabled(
+            not busy
+            and self.cover_button.property("ready") is True
+            and self.cover_style.currentData() == "classica"
+        )
         for control in (
             self.cover_style,
             self.title_edit,
@@ -330,4 +342,12 @@ class WorkflowSidebar(QFrame):
 
     def set_cover_ready(self, ready: bool) -> None:
         self.cover_button.setProperty("ready", ready)
-        self.cover_button.setEnabled(ready and not self.cancel_button.isEnabled())
+        self._update_cover_actions()
+
+    def _update_cover_actions(self) -> None:
+        ready = self.cover_button.property("ready") is True
+        available = ready and not self.cancel_button.isEnabled()
+        self.cover_button.setEnabled(available)
+        self.crop_button.setEnabled(
+            available and self.cover_style.currentData() == "classica"
+        )
