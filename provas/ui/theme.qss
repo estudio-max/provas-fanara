@@ -244,6 +244,50 @@ QFrame#pageThumbnail {
     background: transparent;
 }
 
+QPushButton#pageReloadButton {
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    color: #3E3F47;
+    background: rgba(255, 255, 255, 224);
+    border: 1px solid #D6D7DC;
+    border-radius: 14px;
+    font-family: "Segoe UI Symbol";
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QPushButton#pageReloadButton:hover {
+    color: #DA4265;
+    background: #FFFFFF;
+    border-color: #DA4265;
+}
+
+QPushButton#pageReloadButton:focus {
+    color: #DA4265;
+    background: #FFFFFF;
+    border: 2px solid #DA4265;
+}
+
+QPushButton#pageReloadButton:pressed {
+    color: #DA4265;
+    background: #F4F4F6;
+    border-color: #DA4265;
+}
+
+QPushButton#pageReloadButton:disabled {
+    color: #85868E;
+    background: rgba(255, 255, 255, 190);
+    border-color: #D6D7DC;
+}
+
+QPushButton#pageReloadButton[busy="true"] {
+    color: #696A73;
+    font-size: 16px;
+}
+
 QLabel#pageImage {
     color: #9A9BA5;
     background: #202126;

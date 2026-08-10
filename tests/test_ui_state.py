@@ -488,6 +488,107 @@ def test_preview_translates_generated_sequence_role(qapp, tmp_path: Path, plan):
     assert grid.page_roles == ("Sequência",)
 
 
+@pytest.fixture
+def grid_with_cover(qapp, plan):
+    from provas.ui.preview_grid import PreviewGrid
+
+    grid = PreviewGrid()
+    grid.resize(760, 560)
+    grid.show()
+    grid.set_previews(
+        plan,
+        (
+            Image.new("RGB", (420, 297), "#202126"),
+            Image.new("RGB", (420, 297), "#D6E5F2"),
+            Image.new("RGB", (420, 297), "#EBD9C9"),
+        ),
+    )
+    grid.set_page_alternatives({1})
+    for _ in range(3):
+        qapp.processEvents()
+    yield grid
+    grid.close()
+
+
+def test_only_internal_pages_with_alternatives_have_reload_button(grid_with_cover):
+    assert grid_with_cover.card(0).reload_button is None
+    assert grid_with_cover.card(1).reload_button.isVisible()
+    assert grid_with_cover.card(1).reload_button.isEnabled()
+    assert grid_with_cover.card(1).reload_button.size().toTuple() == (28, 28)
+    assert not grid_with_cover.card(2).reload_button.isEnabled()
+
+
+def test_reload_button_emits_its_page_number_and_has_clear_accessibility(grid_with_cover, qapp):
+    button = grid_with_cover.card(1).reload_button
+    assert button is not None
+    assert button.accessibleName() == "Mudar diagramação da página 1"
+    assert button.toolTip() == "Mudar diagramação da página 1"
+    emitted: list[int] = []
+    grid_with_cover.page_layout_requested.connect(emitted.append)
+
+    button.setFocus()
+    QTest.keyClick(button, Qt.Key.Key_Space)
+    qapp.processEvents()
+
+    assert button.hasFocus()
+    assert emitted == [1]
+
+
+def test_page_reload_busy_state_is_discrete_and_disables_its_button(grid_with_cover):
+    button = grid_with_cover.card(1).reload_button
+    assert button is not None
+
+    grid_with_cover.set_page_busy(1, True)
+
+    assert not button.isEnabled()
+    assert button.text() == "…"
+    assert button.property("busy") is True
+    assert button.accessibleDescription() == "Atualizando diagramação da página 1"
+
+    grid_with_cover.set_page_busy(1, False)
+
+    assert button.isEnabled()
+    assert button.text() == "↻"
+    assert button.property("busy") is False
+
+
+def test_replace_page_preview_keeps_card_scroll_and_lru_entry(qapp, tmp_path: Path, plan):
+    from provas.ui.preview_grid import PreviewGrid
+
+    pages = tuple(
+        PagePlan(number, "solo-landscape", (str(tmp_path / f"page-{number}.jpg"),), "narrative")
+        for number in range(1, 15)
+    )
+    full_plan = replace(plan, pages=pages)
+    images = tuple(Image.new("RGB", (420, 297), "#D6E5F2") for _ in pages)
+    grid = PreviewGrid()
+    grid.resize(760, 480)
+    grid.show()
+    grid.set_previews(full_plan, images)
+    grid.set_zoom(120)
+    for _ in range(4):
+        qapp.processEvents()
+    scrollbar = grid.scroll_area.verticalScrollBar()
+    scrollbar.setValue(min(40, scrollbar.maximum()))
+    original_scroll = scrollbar.value()
+    card = grid.card(1)
+    original_geometry = card.geometry()
+    materialized_before = grid.materialized_thumbnail_count
+    replacement = Image.new("RGB", (420, 297), "#D84A68")
+
+    grid.replace_page_preview(1, replacement)
+
+    cache_key = (full_plan.seed, full_plan.mode, 1, pages[0].template_id, pages[0].photo_ids)
+    assert grid.card(1) is card
+    assert card.geometry() == original_geometry
+    assert scrollbar.value() == original_scroll
+    assert grid.zoom == 120
+    assert grid.materialized_thumbnail_count == materialized_before
+    assert grid._images[0].pixelColor(1, 1).name() == "#d84a68"
+    assert grid._pixmap_cache[cache_key].pixelColor(1, 1).name() == "#d84a68"
+    grid.close()
+
+
 def test_ready_hierarchy_keeps_export_as_the_only_primary_action(qapp, tmp_path: Path, plan):
     from provas.ui import MainWindow
 

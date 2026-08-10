@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Iterable
+from collections.abc import Collection, Iterable
 
 from PIL import Image
 from PySide6.QtCore import QRect, QTimer, Qt, Signal
@@ -68,9 +68,12 @@ class LazyPageThumbnail(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("pageThumbnail")
+        self.page_number = page.number
         self._source = image
         self._loaded = False
         self._target_width = target_width
+        self._reload_available = False
+        self._reload_busy = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -79,6 +82,27 @@ class LazyPageThumbnail(QFrame):
         self.image_label.setObjectName("pageImage")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumHeight(120)
+
+        self.reload_button: QPushButton | None = None
+        control_strip = QWidget()
+        control_strip.setFixedHeight(28)
+        controls = QHBoxLayout(control_strip)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.addStretch(1)
+        if page.role != "cover":
+            self.reload_button = QPushButton("↻")
+            self.reload_button.setObjectName("pageReloadButton")
+            self.reload_button.setFixedSize(28, 28)
+            self.reload_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            self.reload_button.setAutoDefault(False)
+            action = f"Mudar diagramação da página {page.number}"
+            self.reload_button.setAccessibleName(action)
+            self.reload_button.setToolTip(action)
+            self.reload_button.clicked.connect(
+                lambda _checked=False, number=page.number: self.reload_requested.emit(number)
+            )
+            controls.addWidget(self.reload_button)
+        layout.addWidget(control_strip)
         layout.addWidget(self.image_label)
 
         footer = QHBoxLayout()
@@ -91,6 +115,8 @@ class LazyPageThumbnail(QFrame):
         footer.addWidget(role_label)
         layout.addLayout(footer)
         self.set_target_width(target_width)
+
+    reload_requested = Signal(int)
 
     def set_target_width(self, width: int) -> None:
         self._target_width = max(190, width)
@@ -113,6 +139,33 @@ class LazyPageThumbnail(QFrame):
         self.image_label.setText("")
         self._loaded = True
 
+    def replace_preview(self, image: QImage) -> None:
+        """Swap only this card's source bitmap without reflowing the grid."""
+        self._source = image
+        if self._loaded:
+            self._load_pixmap()
+
+    def set_reload_available(self, available: bool) -> None:
+        self._reload_available = available
+        self._sync_reload_button()
+
+    def set_reload_busy(self, busy: bool) -> None:
+        self._reload_busy = busy
+        self._sync_reload_button()
+
+    def _sync_reload_button(self) -> None:
+        if self.reload_button is None:
+            return
+        busy = self._reload_busy
+        self.reload_button.setEnabled(self._reload_available and not busy)
+        self.reload_button.setText("…" if busy else "↻")
+        self.reload_button.setProperty("busy", busy)
+        self.reload_button.setAccessibleDescription(
+            f"Atualizando diagramação da página {self.page_number}" if busy else ""
+        )
+        self.reload_button.style().unpolish(self.reload_button)
+        self.reload_button.style().polish(self.reload_button)
+
     def materialize(self) -> None:
         if not self._loaded:
             self._load_pixmap()
@@ -121,6 +174,7 @@ class LazyPageThumbnail(QFrame):
 class PreviewGrid(QFrame):
     regenerate_requested = Signal()
     undo_requested = Signal()
+    page_layout_requested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -132,6 +186,7 @@ class PreviewGrid(QFrame):
         self._zoom = 100
         self._laid_out_columns = 0
         self._pixmap_cache: OrderedDict[tuple[object, ...], QImage] = OrderedDict()
+        self._alternative_page_numbers: set[int] = set()
         self.pending_scroll_position = 0
         self.empty_message = "Escolher pasta para começar a montar o fotolivro."
         self._build()
@@ -222,6 +277,49 @@ class PreviewGrid(QFrame):
     def zoom(self) -> int:
         return self._zoom
 
+    def card(self, page_number: int) -> LazyPageThumbnail:
+        """Return the stable card instance for a displayed page."""
+        for card in self._cards:
+            if card.page_number == page_number:
+                return card
+        raise KeyError(f"Página {page_number} não está visível na prévia.")
+
+    def set_page_alternatives(self, page_numbers: Collection[int]) -> None:
+        """Enable the local layout action only for pages that can change."""
+        internal_numbers = {
+            page.number for page in self._entries if page.role != "cover"
+        }
+        self._alternative_page_numbers = set(page_numbers) & internal_numbers
+        for card in self._cards:
+            card.set_reload_available(card.page_number in self._alternative_page_numbers)
+
+    def set_page_busy(self, page_number: int, busy: bool) -> None:
+        """Show a discreet in-place busy state for one internal page action."""
+        try:
+            card = self.card(page_number)
+        except KeyError:
+            return
+        card.set_reload_busy(busy)
+
+    def replace_page_preview(self, page_number: int, image: Image.Image) -> None:
+        """Replace one rendered bitmap while preserving card, scroll and layout state."""
+        for index, page in enumerate(self._entries):
+            if page.number != page_number:
+                continue
+            converted = _to_qimage(image)
+            images = list(self._images)
+            images[index] = converted
+            self._images = tuple(images)
+            if self._plan is not None and page.role != "cover":
+                cache_key = self._cache_key(page)
+                self._pixmap_cache[cache_key] = converted
+                self._pixmap_cache.move_to_end(cache_key)
+                while len(self._pixmap_cache) > 128:
+                    self._pixmap_cache.popitem(last=False)
+            self.card(page_number).replace_preview(converted)
+            return
+        raise ValueError(f"Página {page_number} não está visível na prévia.")
+
     def _clear_grid(self) -> None:
         while self.grid.count():
             item = self.grid.takeAt(0)
@@ -231,6 +329,17 @@ class PreviewGrid(QFrame):
                 widget.setParent(None)
                 widget.deleteLater()
         self._cards.clear()
+
+    def _cache_key(self, page: PagePlan) -> tuple[object, ...]:
+        if self._plan is None:
+            raise RuntimeError("Não há plano para indexar a prévia.")
+        return (
+            self._plan.seed,
+            self._plan.mode,
+            page.number,
+            page.template_id,
+            page.photo_ids,
+        )
 
     def show_empty(self, message: str) -> None:
         self.empty_message = message
@@ -277,12 +386,13 @@ class PreviewGrid(QFrame):
         self.pending_scroll_position = scroll
         self._plan = plan
         self._entries = tuple(entries)
+        self._alternative_page_numbers.clear()
         converted: list[QImage] = []
         for page, source in zip(self._entries, sources):
             if page.role == "cover":
                 image = _to_qimage(source)
             else:
-                cache_key = (plan.seed, plan.mode, page.number, page.template_id, page.photo_ids)
+                cache_key = self._cache_key(page)
                 cached = self._pixmap_cache.get(cache_key)
                 image = cached if cached is not None else _to_qimage(source)
                 self._pixmap_cache[cache_key] = image
@@ -339,6 +449,8 @@ class PreviewGrid(QFrame):
         for index, (page, image) in enumerate(zip(self._entries, self._images)):
             role = _ROLE_LABELS.get(page.role, page.role.capitalize())
             card = LazyPageThumbnail(page, role, image, card_width)
+            card.reload_requested.connect(self.page_layout_requested)
+            card.set_reload_available(page.number in self._alternative_page_numbers)
             self._cards.append(card)
             self.grid.addWidget(card, index // columns, index % columns)
             card.show()
