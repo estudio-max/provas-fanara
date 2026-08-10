@@ -98,17 +98,15 @@ def _custo_de_enquadramento(template: Template, photo_ids: tuple[str, ...], rati
     )
 
 
-def _permutacoes_ordenadas(
+def _melhor_permutacao(
     plan: BookPlan, page: PagePlan, template: Template, ratios: Mapping[str, float]
-) -> tuple[tuple[str, ...], ...]:
-    return tuple(
-        sorted(
-            set(permutations(page.photo_ids)),
-            key=lambda photo_ids: (
-                _custo_de_enquadramento(template, photo_ids, ratios),
-                _hash_estavel(plan.seed, page.number, template.id, photo_ids),
-            ),
-        )
+) -> tuple[str, ...]:
+    return min(
+        set(permutations(page.photo_ids)),
+        key=lambda photo_ids: (
+            _custo_de_enquadramento(template, photo_ids, ratios),
+            _hash_estavel(plan.seed, page.number, template.id, photo_ids),
+        ),
     )
 
 
@@ -145,16 +143,15 @@ def alternativas_da_pagina(
 
     alternatives: dict[tuple[str, tuple[str, ...]], PagePlan] = {}
     for template in compatible:
-        for photo_ids in _permutacoes_ordenadas(plan, page, template, ratios):
-            candidate = PagePlan(page.number, template.id, photo_ids, page.role)
-            alternatives[(candidate.template_id, candidate.photo_ids)] = candidate
+        photo_ids = _melhor_permutacao(plan, page, template, ratios)
+        candidate = PagePlan(page.number, template.id, photo_ids, page.role)
+        alternatives[(candidate.template_id, candidate.photo_ids)] = candidate
 
     return tuple(
         sorted(
             alternatives.values(),
             key=lambda candidate: (
                 _adequacao_editorial(plan, page_index, page, templates[candidate.template_id], templates),
-                _custo_de_enquadramento(templates[candidate.template_id], candidate.photo_ids, ratios),
                 _hash_estavel(plan.seed, candidate.number, candidate.template_id, candidate.photo_ids),
             ),
         )

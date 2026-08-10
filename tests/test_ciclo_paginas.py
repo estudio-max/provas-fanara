@@ -109,14 +109,20 @@ def test_cycle_is_deterministic_and_has_no_repeat_before_wrap(case: CycleCase):
     assert len(first) == len({(page.template_id, page.photo_ids) for page in first})
 
 
-def test_cycle_preserves_current_compatible_state_and_advances_from_it(case: CycleCase):
+def test_cycle_from_canonical_state_advances_within_its_stable_sequence(case: CycleCase):
     alternatives = alternativas_da_pagina(case.plan, case.page_number, case.ratios)
-    current = case.page
+    canonical = alternatives[0]
+    plan = BookPlan(
+        case.plan.seed,
+        case.plan.mode,
+        case.plan.cover_photo_ids,
+        tuple(canonical if page.number == canonical.number else page for page in case.plan.pages),
+    )
 
-    assert current in alternatives
     if len(alternatives) > 1:
-        cycled = ciclar_pagina(case.plan, case.page_number, case.ratios)
-        assert next(page for page in cycled.pages if page.number == case.page_number) != current
+        cycled = ciclar_pagina(plan, case.page_number, case.ratios)
+        assert next(page for page in cycled.pages if page.number == case.page_number) == alternatives[1]
+        assert alternativas_da_pagina(cycled, case.page_number, case.ratios) == alternatives
 
 
 def test_legacy_template_starts_at_first_known_alternative_and_keeps_other_pages():
@@ -209,7 +215,7 @@ def test_tem_alternativa_requires_two_distinct_states():
     assert tem_alternativa(pair, 1, {"v1": 2 / 3, "h1": 3 / 2})
 
 
-def test_cycle_from_nonoptimal_compatible_permutation_is_closed_and_path_independent(monkeypatch):
+def test_noncanonical_compatible_state_enters_and_wraps_the_short_canonical_cycle(monkeypatch):
     asymmetric = Template(
         "asymmetric-pair",
         (Slot(Rect(0.05, 0.05, 0.20, 0.90)), Slot(Rect(0.30, 0.05, 0.70, 0.90))),
@@ -217,17 +223,26 @@ def test_cycle_from_nonoptimal_compatible_permutation_is_closed_and_path_indepen
         1.0,
         "balanced",
     )
-    monkeypatch.setattr("provas.ciclo_paginas.catalogo", lambda: (asymmetric,))
+    alternate = Template(
+        "alternate-asymmetric-pair",
+        (Slot(Rect(0.05, 0.05, 0.30, 0.90)), Slot(Rect(0.40, 0.05, 0.60, 0.90))),
+        {"portrait"},
+        1.0,
+        "balanced",
+    )
+    monkeypatch.setattr("provas.ciclo_paginas.catalogo", lambda: (asymmetric, alternate))
     initial_page = PagePlan(1, "asymmetric-pair", ("wide", "narrow"), "sequence")
     initial = _plan(initial_page)
     ratios = {"wide": 0.80, "narrow": 0.25}
 
     expected = alternativas_da_pagina(initial, 1, ratios)
-    assert PagePlan(1, "asymmetric-pair", ("narrow", "wide"), "sequence") in expected
-    assert initial_page in expected
+    assert len(expected) == 2
+    assert all(page.photo_ids == ("narrow", "wide") for page in expected)
+    assert initial_page not in expected
 
     seen: list[PagePlan] = []
-    current = initial
+    current = ciclar_pagina(initial, 1, ratios)
+    assert current.pages[0] == expected[0]
     for _ in range(len(expected)):
         page = current.pages[0]
         assert page not in seen
@@ -235,7 +250,7 @@ def test_cycle_from_nonoptimal_compatible_permutation_is_closed_and_path_indepen
         seen.append(page)
         current = ciclar_pagina(current, 1, ratios)
 
-    assert current.pages[0] == initial_page
+    assert current.pages[0] == expected[0]
     assert set(seen) == set(expected)
 
 
