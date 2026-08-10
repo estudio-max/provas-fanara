@@ -115,9 +115,31 @@ A identidade de cache da capa inclui:
 
 Uma mudança em qualquer item invalida somente a capa. As páginas internas permanecem em cache e não são recompostas.
 
+## Logotipo completo nas capas Mosaico e Curvas
+
+O logotipo escolhido pelo fotógrafo é uma arte pronta e não recebe adaptação
+automática ao fundo da capa. O renderer preserva seus RGB e não converte partes
+da mesma marca em preto ou branco para obter contraste local.
+
+- em imagens RGBA, pixels originalmente com alfa zero continuam transparentes;
+- qualquer pixel originalmente visível (`alpha > 0`) torna-se chapado (`alpha = 255`);
+- imagens RGB/opacas permanecem integralmente opacas, inclusive seu fundo próprio;
+- não há cutout inferido por luminância, recoloração dependente do canvas nem
+  criação de transparência em arquivo opaco;
+- orientação EXIF, contenção sem distorção, warnings e ownership permanecem.
+
+Esse contrato pertence ao logotipo completo do projeto nas capas Mosaico e
+Curvas. Ele é independente da derivação abaixo, aplicada exclusivamente ao
+símbolo oficial usado como ícone do software.
+
 ## Identidade Fanara no aplicativo
 
-O arquivo fornecido `logoFanara Estudio SIMBOLO 2024.png` será convertido em recurso mestre com transparência externa. O branco do monograma interno será preservado; somente o fundo branco conectado às bordas será removido.
+O arquivo fornecido `logoFanara Estudio SIMBOLO 2024.png` será convertido em
+recurso mestre com transparência externa. Como o `ef` branco toca as bordas da
+fonte, um flood-fill literal apagaria o próprio monograma. O alfa externo será
+derivado por ajuste elíptico da silhueta convexa dos pixels rosa oficiais;
+dentro dela, os RGB originais permanecem intactos e o monograma branco é
+preservado mesmo quando conectado à borda.
 
 A cor oficial do símbolo permanece RGB `218, 66, 101` (`#DA4265`).
 
@@ -165,6 +187,8 @@ O schema de projeto será versionado para armazenar a fotografia e o recorte da 
 11. O ícone Fanara é legível e sem halo em todos os tamanhos exigidos.
 12. Capturas visuais da capa, editor e UI em 1093 × 614 são inspecionadas.
 13. Suíte completa, `verificar.py`, rebuild Windows, manifesto e execução fora da árvore passam antes da entrega.
+14. O logotipo completo de Mosaico/Curvas mantém RGB e opacidade chapados,
+    independentemente dos pixels claros ou escuros sob a marca.
 
 ## Ordem de implementação
 

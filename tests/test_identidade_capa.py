@@ -25,27 +25,6 @@ def _color_bbox(image: Image.Image, color: tuple[int, int, int]) -> PixelRect | 
     return PixelRect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
 
 
-def _contrast_ratio(
-    foreground: tuple[int, int, int],
-    background: tuple[int, int, int],
-) -> float:
-    def luminance(color: tuple[int, int, int]) -> float:
-        channels = tuple(channel / 255 for channel in color)
-        linear = tuple(
-            channel / 12.92
-            if channel <= 0.04045
-            else ((channel + 0.055) / 1.055) ** 2.4
-            for channel in channels
-        )
-        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-    foreground_luminance = luminance(foreground)
-    background_luminance = luminance(background)
-    return (max(foreground_luminance, background_luminance) + 0.05) / (
-        min(foreground_luminance, background_luminance) + 0.05
-    )
-
-
 def test_identity_records_are_immutable_and_overflow_is_a_value_error():
     from provas.identidade_capa import CoverTextOverflow, CoverWarning, IdentityData
 
@@ -250,7 +229,7 @@ def test_valid_horizontal_and_vertical_logos_are_contained_without_distortion(tm
     path.unlink()  # Pillow must not retain an open file handle on Windows.
 
 
-def test_alpha_logo_preserves_transparency_and_dark_palette_converts_black_for_contrast(tmp_path):
+def test_alpha_logo_preserves_flat_black_art_on_dark_canvas(tmp_path):
     from provas.identidade_capa import IdentityData, render_identity
 
     path = tmp_path / "logo-alpha.png"
@@ -276,174 +255,63 @@ def test_alpha_logo_preserves_transparency_and_dark_palette_converts_black_for_c
     assert changed.height <= layout.logo_rect.height
     assert canvas.getpixel((changed.x, changed.y)) == palette.fundo_rgb
     center = (changed.x + changed.width // 2, changed.y + changed.height // 2)
-    assert canvas.getpixel(center) == (255, 255, 255)
+    assert canvas.getpixel(center) == (0, 0, 0)
 
 
-@pytest.mark.parametrize(
-    ("source_color", "background"),
-    [
-        ((255, 255, 255), "#F7F4EF"),
-        ((0, 0, 0), "#16161A"),
-        ((0, 0, 0), "#F7F4EF"),
-        ((255, 255, 255), "#16161A"),
-    ],
-)
-def test_logo_content_keeps_alpha_and_reaches_4_5_contrast(
-    tmp_path,
-    source_color,
-    background,
-):
-    from provas.identidade_capa import IdentityData, render_identity
-
-    path = tmp_path / f"logo-{source_color[0]}-{background[1:]}.png"
-    logo = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
-    ImageDraw.Draw(logo).ellipse((50, 25, 149, 74), fill=(*source_color, 255))
-    logo.save(path)
-    logo.close()
-    palette = tema.paleta(background)
-    original = Image.new("RGB", (1600, 1131), palette.fundo_rgb)
-    canvas = original.copy()
-
-    warnings = render_identity(
-        canvas,
-        layout_orbita(1600, 1131, 6),
-        IdentityData("", "", "", str(path)),
-        palette,
-    )
-
-    changed = _changed_bbox(original, canvas)
-    assert warnings == ()
-    assert changed is not None
-    center = (changed.x + changed.width // 2, changed.y + changed.height // 2)
-    rendered_color = canvas.getpixel(center)
-    assert _contrast_ratio(rendered_color, palette.fundo_rgb) >= 4.5
-    if _contrast_ratio(source_color, palette.fundo_rgb) >= 4.5:
-        assert rendered_color == source_color
-    assert canvas.getpixel((changed.x, changed.y)) == palette.fundo_rgb
-
-
-@pytest.mark.parametrize(
-    ("palette_background", "local_background", "source_color"),
-    [
-        ("#F7F4EF", (12, 12, 14), (255, 255, 255)),
-        ("#16161A", (245, 245, 242), (0, 0, 0)),
-    ],
-)
-def test_logo_contrast_is_measured_against_canvas_pixels_under_its_alpha(
-    tmp_path,
-    palette_background,
-    local_background,
-    source_color,
-):
-    from provas.identidade_capa import IdentityData, render_identity
-
-    path = tmp_path / "logo-local.png"
-    logo = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
-    ImageDraw.Draw(logo).ellipse((50, 25, 149, 74), fill=(*source_color, 255))
-    logo.save(path)
-    logo.close()
-    palette = tema.paleta(palette_background)
-    layout = layout_orbita(1600, 1131, 6)
-    canvas = Image.new("RGB", (1600, 1131), palette.fundo_rgb)
-    ImageDraw.Draw(canvas).rectangle(
-        (
-            layout.logo_rect.x,
-            layout.logo_rect.y,
-            layout.logo_rect.right - 1,
-            layout.logo_rect.bottom - 1,
-        ),
-        fill=local_background,
-    )
-
-    render_identity(canvas, layout, IdentityData("", "", "", str(path)), palette)
-
-    center = (
-        layout.logo_rect.x + layout.logo_rect.width // 2,
-        layout.logo_rect.y + layout.logo_rect.height // 2,
-    )
-    rendered_color = canvas.getpixel(center)
-    assert rendered_color == source_color
-    assert _contrast_ratio(rendered_color, local_background) >= 4.5
-
-
-@pytest.mark.parametrize(
-    ("source_color", "majority_background", "minority_background"),
-    [
-        ((255, 255, 255), (0, 0, 0), (255, 255, 255)),
-        ((0, 0, 0), (255, 255, 255), (0, 0, 0)),
-    ],
-)
-def test_every_nontransparent_logo_pixel_has_contrast_on_heterogeneous_canvas(
-    tmp_path,
-    source_color,
-    majority_background,
-    minority_background,
-):
+def test_prepared_logo_is_flat_opaque_and_byte_identical_on_heterogeneous_canvases(tmp_path):
     import provas.identidade_capa as identity
 
     layout = layout_orbita(1600, 1131, 6)
     rect = layout.logo_rect
-    path = tmp_path / f"logo-adversarial-{source_color[0]}.png"
-    source = Image.new("RGBA", (rect.width, rect.height), (*source_color, 255))
-    source.putpixel((rect.width // 2, rect.height // 2), (*source_color, 0))
+    path = tmp_path / "logo-preto.png"
+    source = Image.new("RGBA", (rect.width, rect.height), (0, 0, 0, 0))
+    ImageDraw.Draw(source).rectangle((20, 10, rect.width - 21, rect.height - 11), fill=(0, 0, 0, 128))
     source.save(path)
-    source_alpha = tuple(source.getchannel("A").get_flattened_data())
     source.close()
-    canvas = Image.new("RGB", (1600, 1131), (127, 127, 127))
-    split = rect.x + round(rect.width * 0.9)
-    draw = ImageDraw.Draw(canvas)
-    draw.rectangle(
-        (rect.x, rect.y, split - 1, rect.bottom - 1),
-        fill=majority_background,
-    )
-    draw.rectangle(
-        (split, rect.y, rect.right - 1, rect.bottom - 1),
-        fill=minority_background,
-    )
+    light = Image.new("RGB", (1600, 1131), (255, 255, 255))
+    dark = Image.new("RGB", (1600, 1131), (0, 0, 0))
+    ImageDraw.Draw(light).rectangle((rect.x + rect.width // 2, rect.y, rect.right, rect.bottom), fill=(12, 12, 12))
+    ImageDraw.Draw(dark).rectangle((rect.x + rect.width // 2, rect.y, rect.right, rect.bottom), fill=(245, 245, 245))
 
-    prepared, warnings = identity._prepare_logo(str(path), rect, canvas)
+    first, first_warnings = identity._prepare_logo(str(path), rect, light)
+    second, second_warnings = identity._prepare_logo(str(path), rect, dark)
 
-    assert warnings == ()
-    assert prepared is not None
+    assert first_warnings == second_warnings == ()
+    assert first is not None and second is not None
     try:
-        background = canvas.crop((rect.x, rect.y, rect.right, rect.bottom))
-        prepared_pixels = tuple(prepared.get_flattened_data())
-        background_pixels = tuple(background.get_flattened_data())
-        assert tuple(pixel[3] for pixel in prepared_pixels) == source_alpha
-        assert all(
-            _contrast_ratio(pixel[:3], background_pixel) >= 4.5
-            for pixel, background_pixel in zip(prepared_pixels, background_pixels)
-            if pixel[3]
-        )
-        for pixel, background_pixel in zip(prepared_pixels, background_pixels):
-            if not pixel[3]:
-                continue
-            if _contrast_ratio(source_color, background_pixel) >= 4.5:
-                assert pixel[:3] == source_color
-            else:
-                assert pixel[:3] != source_color
+        assert first.size == second.size
+        assert first.tobytes() == second.tobytes()
+        visible = [pixel for pixel in first.get_flattened_data() if pixel[3]]
+        assert visible
+        assert {pixel[:3] for pixel in visible} == {(0, 0, 0)}
+        assert {pixel[3] for pixel in visible} == {255}
     finally:
-        prepared.close()
+        first.close()
+        second.close()
 
 
-def test_opaque_white_logo_background_uses_the_existing_cutout_behavior(tmp_path):
-    from provas.identidade_capa import IdentityData, render_identity
+def test_rgb_logo_preserves_its_own_opaque_white_background(tmp_path):
+    import provas.identidade_capa as identity
 
     path = tmp_path / "logo-fundo-branco.png"
     logo = Image.new("RGB", (200, 100), (255, 255, 255))
     ImageDraw.Draw(logo).rectangle((50, 25, 149, 74), fill=(0, 0, 0))
     logo.save(path)
     logo.close()
-    palette = tema.paleta("#F7F4EF")
-    background = Image.new("RGB", (1600, 1131), palette.fundo_rgb)
-    canvas = background.copy()
     layout = layout_orbita(1600, 1131, 6)
+    canvas = Image.new("RGB", (1600, 1131), (218, 66, 101))
 
-    render_identity(canvas, layout, IdentityData("", "", "", str(path)), palette)
+    prepared, warnings = identity._prepare_logo(str(path), layout.logo_rect, canvas)
 
-    changed = _changed_bbox(background, canvas)
-    assert changed is not None
-    assert canvas.getpixel((changed.x, changed.y)) == (0, 0, 0)
+    assert warnings == ()
+    assert prepared is not None
+    try:
+        assert prepared.width / prepared.height == pytest.approx(2.0, rel=0.02)
+        assert prepared.getpixel((0, 0)) == (255, 255, 255, 255)
+        assert prepared.getpixel((prepared.width // 2, prepared.height // 2)) == (0, 0, 0, 255)
+        assert set(prepared.getchannel("A").get_flattened_data()) == {255}
+    finally:
+        prepared.close()
 
 
 @pytest.mark.parametrize(

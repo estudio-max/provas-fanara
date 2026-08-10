@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from hashlib import sha256
 import os
 import platform
 import sys
@@ -23,6 +24,12 @@ DEPENDENCIAS = (
     ("PySide6", "PySide6", "6.7"), ("packaging", "packaging", "23.0"),
     ("numpy", "NumPy", "1.26"), ("cv2", "OpenCV", "4.10", "5"),
 )
+RECURSOS_OFICIAIS = {
+    "fanara-symbol.png": "a6771c2caa80614f1223e4a158c114dc4cf573005df774539494492b5eba7ae4",
+    "icone.ico": "5931ba87d2947ba6362a8c1e08a5b84c64ea00274040221ad354c6f3944dd2a2",
+    "fonts/BodoniModa[opsz,wght].ttf": "550f5e34ee0a828d7941b1fe9bc58b34e5260d3f33a61532e6d0a0114e79a5cf",
+    "fonts/OFL-BodoniModa.txt": "97e32fdfa86a9aa79b85ce20b63b8618a8bf3e1110a0e631fac7f73983417b55",
+}
 
 
 def linha(estado: str, texto: str) -> None:
@@ -116,6 +123,27 @@ def diagnosticar_fontes() -> int:
     return 0
 
 
+def diagnosticar_recursos() -> int:
+    """Validate every tracked brand/font resource in source and frozen layouts."""
+    from provas import recursos
+
+    problemas = 0
+    for nome, esperado in RECURSOS_OFICIAIS.items():
+        path = recursos.caminho(nome)
+        try:
+            atual = sha256(path.read_bytes()).hexdigest()
+        except OSError as erro:
+            problemas += 1
+            linha(FALHA, f"recurso oficial ausente: {nome} ({erro})")
+            continue
+        if atual != esperado:
+            problemas += 1
+            linha(FALHA, f"hash inválido do recurso oficial: {nome}")
+        else:
+            linha(OK, f"recurso oficial verificado: {nome}")
+    return problemas
+
+
 def diagnosticar_cascade(cv2_module=None) -> int:
     """Valide a presença e o carregamento do cascade Haar distribuído pelo OpenCV."""
     try:
@@ -178,6 +206,7 @@ def main(_argv: list[str] | None = None) -> int:
     problemas = diagnosticar_dependencias()
     problemas += diagnosticar_cascade()
     problemas += testar_escrita()
+    problemas += diagnosticar_recursos()
     diagnosticar_fontes()
     if problemas:
         linha(AVISO, "pipeline editorial não foi executado enquanto houver dependências pendentes.")

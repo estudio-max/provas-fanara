@@ -378,9 +378,11 @@ def test_motor_render_cover_retains_ids_metadata_identity_seed_and_warnings(
 
     monkeypatch.setattr(capas, "gerar", fake_generate)
     try:
-        warnings = motor._render_cover(document, config, plan, photos)
+        rendered = motor._render_cover(document, config, plan, photos)
 
-        assert warnings == (warning,)
+        assert rendered.warnings == (warning,)
+        assert rendered.classic_photo_id == ""
+        assert rendered.classic_photo_target is None
         assert len(observed) == 1
         style, items, width, height, palette, identity, seed = observed[0]
         assert style == "curvas_editoriais"

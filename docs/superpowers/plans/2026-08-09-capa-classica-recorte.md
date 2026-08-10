@@ -18,7 +18,8 @@
 - Crop manual: foco X/Y em `[0, 1]`, zoom até `2.5`, nenhuma área vazia.
 - A foto Clássica é independente de `cover_ids` usados por Mosaico/Curvas.
 - Nenhuma fotografia, logo de cliente, `config.json` ou `.provas.json` pode entrar no ZIP.
-- O símbolo oficial preserva `#DA4265` e o monograma branco; somente o branco conectado às bordas vira transparência.
+- O símbolo oficial preserva `#DA4265` e o monograma branco; como o `ef` toca as bordas, o alfa externo segue a elipse ajustada à silhueta rosa, não flood-fill branco.
+- O logotipo completo usado nas capas preserva seus RGB originais; pixels visíveis ficam opacos e o fundo da capa nunca provoca recoloração local.
 - Preview e primeira página do PDF devem usar o mesmo renderer.
 
 ---
@@ -444,6 +445,9 @@ git commit -m "feat: edit classic cover crop"
 - Modify: `provas/ui/main_window.py`
 - Modify: `empacotar.py`
 - Modify: `verificar.py`
+- Modify: `provas/identidade_capa.py`
+- Modify: `docs/superpowers/specs/2026-08-09-capa-classica-recorte-design.md`
+- Test: `tests/test_identidade_capa.py`
 - Test: `tests/test_ui_packaging.py`
 
 **Interfaces:**
@@ -454,15 +458,17 @@ git commit -m "feat: edit classic cover crop"
 
 Copiar `C:\Users\estud\Downloads\logoFanara Estudio SIMBOLO 2024.png` para `assets/fanara-symbol-source.png` sem alteração. O teste deve afirmar cor dominante `(218, 66, 101)`, alpha zero nos quatro cantos do derivado e branco opaco no monograma.
 
+Antes do ícone, escrever RED independente para o logotipo completo de Mosaico/Curvas: RGB não muda com o fundo; `alpha=0` permanece transparente, `alpha>0` vira 255; imagem RGB continua integralmente opaca, sem cutout por luminância.
+
 - [ ] **Step 2: Confirmar RED**
 
 Run: `python -m pytest tests/test_ui_packaging.py -k fanara -q`
 
 Expected: FAIL porque recursos derivados não existem.
 
-- [ ] **Step 3: Gerar transparência por flood-fill externo e ICO**
+- [ ] **Step 3: Gerar transparência pela silhueta convexa e ICO**
 
-Usar flood-fill iniciado nos quatro cantos com tolerância RGB 8; nunca tornar transparentes pixels brancos não conectados às bordas. Redimensionar em 3×/LANCZOS com safe area de 4% e salvar o ICO com todos os tamanhos exigidos.
+O flood-fill branco alcança também o `ef` oficial. Ajustar uma elipse à silhueta convexa dos pixels rosa (tolerância RGB 8), usá-la somente como alfa externo e preservar os RGB originais em seu interior. Redimensionar em 3×/LANCZOS com safe area de 4% e salvar o ICO com todos os tamanhos exigidos.
 
 - [ ] **Step 4: Usar recurso na janela**
 
@@ -495,7 +501,7 @@ Expected: fontes/ícones presentes, hashes válidos; mutantes `marca-cliente.png
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add assets provas/recursos.py provas/ui/main_window.py empacotar.py verificar.py tests/test_ui_packaging.py
+git add assets provas/recursos.py provas/ui/main_window.py provas/identidade_capa.py empacotar.py verificar.py tests/test_identidade_capa.py tests/test_ui_packaging.py docs/superpowers/specs/2026-08-09-capa-classica-recorte-design.md docs/superpowers/plans/2026-08-09-capa-classica-recorte.md
 git commit -m "feat: apply official Fanara app identity"
 ```
 

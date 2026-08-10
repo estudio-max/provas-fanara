@@ -9,7 +9,7 @@ from typing import Callable
 
 from PIL import Image, UnidentifiedImageError
 from PySide6.QtCore import QFile, QIODevice, QThread, QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -27,6 +27,7 @@ from ..capa_classica import ClassicCrop
 from ..modelos import BookPlan, PhotoInfo
 from ..motor import Config, PlanAnalysisResult, Resultado
 from ..projeto import ProjectSchemaError, ProjectState, load_project, save_project, undo_regeneration
+from .. import recursos
 from .cover_dialog import CoverDialog
 from .crop_dialog import CropDialog
 from .diagnostics import DiagnosticsPanel
@@ -44,6 +45,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setObjectName("mainWindow")
         self.setWindowTitle("Fotolivro · Mesa de edição")
+        self.setWindowIcon(QIcon(str(recursos.caminho("icone.ico"))))
         self.setMinimumSize(840, 540)
         self.resize(1366, 768)
 
@@ -89,9 +91,14 @@ class MainWindow(QMainWindow):
         top.setContentsMargins(16, 0, 16, 0)
         top.setSpacing(12)
 
-        mark = QLabel("F")
+        mark = QLabel()
         mark.setObjectName("brandMark")
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setStyleSheet("background: transparent;")
+        mark.setPixmap(QPixmap(str(recursos.caminho("fanara-symbol.png"))).scaled(
+            32, 32, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ))
         top.addWidget(mark)
         brand = QVBoxLayout()
         brand.setContentsMargins(0, 0, 0, 0)

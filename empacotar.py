@@ -20,6 +20,10 @@ RAIZ = os.path.dirname(os.path.abspath(__file__))
 NOME = "Fotolivro"
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
 MANIFESTO = "BUILD-MANIFEST.json"
+OFFICIAL_ASSETS = {
+    name: hashlib.sha256(Path(RAIZ, "assets", name).read_bytes()).hexdigest()
+    for name in ("fanara-symbol.png", "icone.ico")
+}
 
 LEIAME_WINDOWS = """FOTOLIVRO — PDF editorial a partir da pasta do ensaio
 
@@ -60,9 +64,15 @@ def dados_pyinstaller() -> list[str]:
         os.path.dirname(pyside_package), "plugins", "platforms", "qwindows.dll",
     )
     cascade = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    official_data = (
+        (os.path.join(RAIZ, "assets", "fanara-symbol.png"), "assets"),
+        (os.path.join(RAIZ, "assets", "icone.ico"), "assets"),
+        (os.path.join(RAIZ, "assets", "fonts", "BodoniModa[opsz,wght].ttf"), "assets/fonts"),
+        (os.path.join(RAIZ, "assets", "fonts", "OFL-BodoniModa.txt"), "assets/fonts"),
+    )
     if not os.path.isfile(cascade):
         raise FileNotFoundError(f"Cascade Haar local não encontrado: {cascade}")
-    return [
+    arguments = [
         "--add-data", f"{theme}{os.pathsep}provas/ui",
         "--add-binary", f"{platform_plugin}{os.pathsep}PySide6/plugins/platforms",
         "--add-data", f"{cascade}{os.pathsep}cv2/data",
@@ -72,6 +82,9 @@ def dados_pyinstaller() -> list[str]:
         # opcional de Graph API é carregado dinamicamente e pode ser omitido.
         "--exclude-module", "cv2.gapi",
     ]
+    for source, destination in official_data:
+        arguments.extend(("--add-data", f"{source}{os.pathsep}{destination}"))
+    return arguments
 
 
 def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
@@ -86,6 +99,13 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
     problemas: list[str] = []
     with zipfile.ZipFile(pacote) as archive:
         nomes = tuple(name.replace("\\", "/") for name in archive.namelist())
+        hashes = {
+            name.lower(): hashlib.sha256(archive.read(original)).hexdigest()
+            for name, original in zip(nomes, archive.namelist())
+            if name.lower() in {
+                f"fotolivro/_internal/assets/{asset}" for asset in OFFICIAL_ASSETS
+            }
+        }
     minusculos = tuple(name.lower() for name in nomes)
     for obrigatorio in obrigatorios:
         if obrigatorio.lower() not in minusculos:
@@ -94,6 +114,10 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         "QSS": lambda name: name.endswith("/provas/ui/theme.qss"),
         "qwindows": lambda name: name.endswith("/pyside6/plugins/platforms/qwindows.dll"),
         "cascade Haar": lambda name: name.endswith("/cv2/data/haarcascade_frontalface_default.xml"),
+        "símbolo Fanara": lambda name: name == "fotolivro/_internal/assets/fanara-symbol.png",
+        "ícone Fanara": lambda name: name == "fotolivro/_internal/assets/icone.ico",
+        "Bodoni Moda": lambda name: name == "fotolivro/_internal/assets/fonts/bodonimoda[opsz,wght].ttf",
+        "licença OFL": lambda name: name == "fotolivro/_internal/assets/fonts/ofl-bodonimoda.txt",
     }
     for rotulo, presente in ativos.items():
         if not any(presente(name) for name in minusculos):
@@ -108,6 +132,12 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
             problemas.append(f"dado de usuário incluído: {name}")
         elif name.endswith(".provas.json"):
             problemas.append(f"projeto de usuário incluído: {name}")
+        elif name in {
+            f"fotolivro/_internal/assets/{asset}" for asset in OFFICIAL_ASSETS
+        }:
+            asset = Path(name).name
+            if hashes.get(name) != OFFICIAL_ASSETS[asset]:
+                problemas.append(f"ativo oficial com hash inválido: {name}")
         elif Path(name).suffix in extensoes_de_imagem:
             problemas.append(f"fotografia ou logotipo incluído no pacote: {name}")
     return tuple(problemas)
@@ -122,25 +152,15 @@ def remover_dados_usuario(pasta: str) -> None:
 
 
 def gerar_icone() -> str | None:
-    """Create the neutral Windows icon embedded in the executable."""
+    """Regenerate the tracked official identity before freezing the executable."""
     try:
-        from PIL import Image, ImageDraw
+        from provas.recursos import gerar_identidade_oficial
     except ImportError:
         return None
+    source = Path(RAIZ, "assets", "fanara-symbol-source.png")
+    symbol = Path(RAIZ, "assets", "fanara-symbol.png")
     caminho = os.path.join(RAIZ, "assets", "icone.ico")
-    os.makedirs(os.path.dirname(caminho), exist_ok=True)
-    lado, escala = 512, 2
-    tela = Image.new("RGBA", (lado * escala, lado * escala), (22, 22, 26, 255))
-    desenho = ImageDraw.Draw(tela)
-    meio, raio = lado * escala / 2, lado * escala * 0.33
-    desenho.polygon([(meio, meio - raio), (meio + raio, meio),
-                     (meio, meio + raio), (meio - raio, meio)], fill=(236, 237, 240, 255))
-    interno = raio * 0.45
-    desenho.polygon([(meio, meio - interno), (meio + interno, meio),
-                     (meio, meio + interno), (meio - interno, meio)], fill=(216, 64, 96, 255))
-    tela.resize((lado, lado), Image.Resampling.LANCZOS).save(
-        caminho, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
-    )
+    gerar_identidade_oficial(source, symbol, Path(caminho))
     return caminho
 
 
@@ -153,6 +173,8 @@ def _fontes_do_pacote() -> tuple[Path, ...]:
     fixed = tuple(
         root / name for name in (
             "pyproject.toml", "provas_cli.py", "Provas.pyw", "verificar.py", "empacotar.py",
+            "assets/fanara-symbol-source.png", "assets/fanara-symbol.png", "assets/icone.ico",
+            "assets/fonts/BodoniModa[opsz,wght].ttf", "assets/fonts/OFL-BodoniModa.txt",
         )
     )
     package = tuple(path for path in (root / "provas").rglob("*") if path.suffix in {".py", ".qss"})

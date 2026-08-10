@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from . import tema
 from .capa_curvas import CurveLayout, PixelRect
@@ -17,7 +17,6 @@ _SITE_SIZES = tuple(range(18, 13, -1))
 _LOGO_MISSING = "O logotipo não foi encontrado; a capa foi criada sem ele."
 _LOGO_UNREADABLE = "O logotipo não pôde ser lido; a capa foi criada sem ele."
 _OVERFLOW_MESSAGE = "O texto da capa não cabe. Abrevie o conteúdo antes de exportar."
-_MINIMUM_LOGO_CONTRAST = 4.5
 
 
 @dataclass(frozen=True)
@@ -40,53 +39,6 @@ class CoverTextOverflow(ValueError):
 
 def _rgb(color: tema.Cor) -> tuple[int, int, int]:
     return tuple(round(channel * 255) for channel in color)  # type: ignore[return-value]
-
-
-def _relative_luminance(color: tuple[int, int, int]) -> float:
-    channels = tuple(channel / 255 for channel in color)
-    linear = tuple(
-        channel / 12.92
-        if channel <= 0.04045
-        else ((channel + 0.055) / 1.055) ** 2.4
-        for channel in channels
-    )
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-
-def _contrast_ratio(first: float, second: float) -> float:
-    return (max(first, second) + 0.05) / (min(first, second) + 0.05)
-
-
-def _enforce_logo_contrast(
-    logo: Image.Image,
-    background: Image.Image,
-) -> None:
-    corrected_pixels = []
-    changed = False
-    for logo_pixel, background_pixel in zip(
-        logo.get_flattened_data(),
-        background.get_flattened_data(),
-    ):
-        red, green, blue, alpha = logo_pixel
-        if alpha:
-            logo_luminance = _relative_luminance((red, green, blue))
-            background_luminance = _relative_luminance(background_pixel)
-            if (
-                _contrast_ratio(logo_luminance, background_luminance)
-                < _MINIMUM_LOGO_CONTRAST
-            ):
-                dark_contrast = _contrast_ratio(0.0, background_luminance)
-                light_contrast = _contrast_ratio(1.0, background_luminance)
-                color = (
-                    (0, 0, 0)
-                    if dark_contrast >= light_contrast
-                    else (255, 255, 255)
-                )
-                logo_pixel = (*color, alpha)
-                changed = True
-        corrected_pixels.append(logo_pixel)
-    if changed:
-        logo.putdata(corrected_pixels)
 
 
 def _scale_for(canvas: Image.Image) -> float:
@@ -213,7 +165,7 @@ def _draw_identity_lines(
 
 
 def _load_normalized_logo(path: str) -> Image.Image:
-    """Load, normalize and crop a visible raster logo or raise ``ValueError``."""
+    """Load a flat logo without inventing transparency or background-dependent RGB."""
     with Image.open(path) as opened:
         transposed = ImageOps.exif_transpose(opened)
         try:
@@ -224,14 +176,8 @@ def _load_normalized_logo(path: str) -> Image.Image:
                 transposed.close()
     try:
         with logo.getchannel("A") as alpha:
-            opaque = alpha.getextrema()[0] == 255
-        if opaque:
-            with logo.convert("L") as grayscale:
-                with ImageChops.invert(grayscale) as inverted:
-                    with inverted.point(
-                        lambda value: min(255, int(value * 1.6))
-                    ) as alpha_mask:
-                        logo.putalpha(alpha_mask)
+            with alpha.point(lambda value: 255 if value else 0) as flat_alpha:
+                logo.putalpha(flat_alpha)
         with logo.getchannel("A") as alpha:
             alpha_bounds = alpha.getbbox()
         if logo.width <= 0 or logo.height <= 0 or alpha_bounds is None:
@@ -260,11 +206,9 @@ def _prepare_logo(
             Image.Resampling.LANCZOS,
         )
         contained.load()
-        x = rect.x + (rect.width - contained.width) // 2
-        y = rect.y + (rect.height - contained.height) // 2
-        with canvas.crop((x, y, x + contained.width, y + contained.height)) as crop:
-            with crop.convert("RGB") as local_background:
-                _enforce_logo_contrast(contained, local_background)
+        with contained.getchannel("A") as alpha:
+            with alpha.point(lambda value: 255 if value else 0) as flat_alpha:
+                contained.putalpha(flat_alpha)
         return contained, ()
     except (OSError, SyntaxError, ValueError):
         return None, (CoverWarning("logo_ilegivel", _LOGO_UNREADABLE),)
