@@ -207,3 +207,56 @@ def test_tem_alternativa_requires_two_distinct_states():
     pair = _plan(PagePlan(1, "pair-asymmetric-left", ("v1", "h1"), "opening"))
 
     assert tem_alternativa(pair, 1, {"v1": 2 / 3, "h1": 3 / 2})
+
+
+def test_cycle_from_nonoptimal_compatible_permutation_is_closed_and_path_independent(monkeypatch):
+    asymmetric = Template(
+        "asymmetric-pair",
+        (Slot(Rect(0.05, 0.05, 0.20, 0.90)), Slot(Rect(0.30, 0.05, 0.70, 0.90))),
+        {"portrait"},
+        1.0,
+        "balanced",
+    )
+    monkeypatch.setattr("provas.ciclo_paginas.catalogo", lambda: (asymmetric,))
+    initial_page = PagePlan(1, "asymmetric-pair", ("wide", "narrow"), "sequence")
+    initial = _plan(initial_page)
+    ratios = {"wide": 0.80, "narrow": 0.25}
+
+    expected = alternativas_da_pagina(initial, 1, ratios)
+    assert PagePlan(1, "asymmetric-pair", ("narrow", "wide"), "sequence") in expected
+    assert initial_page in expected
+
+    seen: list[PagePlan] = []
+    current = initial
+    for _ in range(len(expected)):
+        page = current.pages[0]
+        assert page not in seen
+        assert alternativas_da_pagina(current, 1, ratios) == expected
+        seen.append(page)
+        current = ciclar_pagina(current, 1, ratios)
+
+    assert current.pages[0] == initial_page
+    assert set(seen) == set(expected)
+
+
+def test_tem_alternativa_is_false_with_exactly_one_state(monkeypatch):
+    single = Template(
+        "single-only",
+        (Slot(Rect(0.10, 0.05, 0.80, 0.90)),),
+        {"portrait"},
+        1.0,
+        "airy",
+    )
+    monkeypatch.setattr("provas.ciclo_paginas.catalogo", lambda: (single,))
+    plan = _plan(PagePlan(1, "single-only", ("v1",), "opening"))
+    ratios = {"v1": 2 / 3}
+
+    assert alternativas_da_pagina(plan, 1, ratios) == (plan.pages[0],)
+    assert not tem_alternativa(plan, 1, ratios)
+
+
+def test_rejects_boolean_aspect_ratio():
+    plan = _plan(PagePlan(1, "single-portrait", ("v1",), "opening"))
+
+    with pytest.raises(ValueError, match="Proporção inválida"):
+        alternativas_da_pagina(plan, 1, {"v1": True})

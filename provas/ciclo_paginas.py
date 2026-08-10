@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from hashlib import blake2b
 from itertools import permutations
-from math import log
+from math import isfinite, log
 from typing import Mapping
 
 from .modelos import BookPlan, PagePlan, Template
@@ -29,7 +29,7 @@ def _ratios_da_pagina(page: PagePlan, aspect_ratios: Mapping[str, float]) -> dic
         if photo_id not in aspect_ratios:
             raise ValueError(f"Proporção ausente para a foto: {photo_id}")
         ratio = aspect_ratios[photo_id]
-        if not isinstance(ratio, (int, float)) or ratio <= 0:
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not isfinite(ratio) or ratio <= 0:
             raise ValueError(f"Proporção inválida para a foto: {photo_id}")
         ratios[photo_id] = float(ratio)
     return ratios
@@ -98,16 +98,17 @@ def _custo_de_enquadramento(template: Template, photo_ids: tuple[str, ...], rati
     )
 
 
-def _melhor_permutacao(
+def _permutacoes_ordenadas(
     plan: BookPlan, page: PagePlan, template: Template, ratios: Mapping[str, float]
-) -> tuple[str, ...]:
-    candidates = tuple(sorted(set(permutations(page.photo_ids))))
-    return min(
-        candidates,
-        key=lambda photo_ids: (
-            _custo_de_enquadramento(template, photo_ids, ratios),
-            _hash_estavel(plan.seed, page.number, template.id, photo_ids),
-        ),
+) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        sorted(
+            set(permutations(page.photo_ids)),
+            key=lambda photo_ids: (
+                _custo_de_enquadramento(template, photo_ids, ratios),
+                _hash_estavel(plan.seed, page.number, template.id, photo_ids),
+            ),
+        )
     )
 
 
@@ -144,18 +145,16 @@ def alternativas_da_pagina(
 
     alternatives: dict[tuple[str, tuple[str, ...]], PagePlan] = {}
     for template in compatible:
-        photo_ids = _melhor_permutacao(plan, page, template, ratios)
-        candidate = PagePlan(page.number, template.id, photo_ids, page.role)
-        alternatives[(candidate.template_id, candidate.photo_ids)] = candidate
-
-    if page.template_id in {template.id for template in compatible}:
-        alternatives[(page.template_id, page.photo_ids)] = page
+        for photo_ids in _permutacoes_ordenadas(plan, page, template, ratios):
+            candidate = PagePlan(page.number, template.id, photo_ids, page.role)
+            alternatives[(candidate.template_id, candidate.photo_ids)] = candidate
 
     return tuple(
         sorted(
             alternatives.values(),
             key=lambda candidate: (
                 _adequacao_editorial(plan, page_index, page, templates[candidate.template_id], templates),
+                _custo_de_enquadramento(templates[candidate.template_id], candidate.photo_ids, ratios),
                 _hash_estavel(plan.seed, candidate.number, candidate.template_id, candidate.photo_ids),
             ),
         )
