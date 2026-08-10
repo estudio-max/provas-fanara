@@ -746,3 +746,124 @@ def test_distinct_destinations_publish_independently(tmp_path: Path, image_facto
     assert max_active == 2
     assert all(Path(config.saida).exists() for config in configs)
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def _page_cycle_plan(paths: tuple[Path, ...], mode: str) -> BookPlan:
+    return BookPlan(
+        97,
+        mode,
+        (),
+        (
+            PagePlan(1, "single-landscape", (str(paths[0]),), "opening"),
+            PagePlan(2, "pair-asymmetric-left", (str(paths[1]), str(paths[2])), "sequence"),
+            PagePlan(3, "single-landscape", (str(paths[3]),), "ending"),
+        ),
+    )
+
+
+def _tracking_page_loader(opened: list[str], closed: list[str]):
+    def load(photo_id: str) -> Image.Image:
+        opened.append(photo_id)
+        image = Image.new("RGB", (360, 240), (90, 120, 150))
+        original_close = image.close
+
+        def close() -> None:
+            closed.append(photo_id)
+            original_close()
+
+        image.close = close  # type: ignore[method-assign]
+        return image
+
+    return load
+
+
+@pytest.mark.parametrize("mode", ("prova", "fotolivro"))
+def test_page_cycle_renders_only_selected_page_and_preserves_other_page_plans(
+    tmp_path: Path, image_factory, monkeypatch, mode: str,
+):
+    from provas import motor
+
+    paths = tuple(
+        image_factory(f"pagina-{index}.jpg", size=(360, 240), color=(30 * index, 80, 140))
+        for index in range(1, 5)
+    )
+    plan = _page_cycle_plan(paths, mode)
+    opened: list[str] = []
+    closed: list[str] = []
+    monkeypatch.setattr(motor, "_open_photo", _tracking_page_loader(opened, closed))
+
+    result = motor.ciclar_preview_pagina(motor.Config(str(tmp_path), modo=mode), plan, 2, 720)
+
+    assert set(opened) == set(plan.pages[1].photo_ids)
+    assert result.plan.pages[:1] == plan.pages[:1]
+    assert result.plan.pages[2:] == plan.pages[2:]
+    assert result.page_number == 2
+    assert result.thumbnail.size[0] == 720
+    assert sorted(closed) == sorted(opened)
+
+
+def test_page_cycle_supports_long_photo_names_and_matches_its_exported_pdf_page(
+    tmp_path: Path, image_factory,
+):
+    from provas import motor
+
+    paths = tuple(
+        image_factory(
+            f"casamento-na-fazenda-com-familia-e-amigos-registro-{index:02d}.jpg",
+            size=(360, 240),
+            color=(30 * index, 80, 140),
+        )
+        for index in range(1, 5)
+    )
+    plan = _page_cycle_plan(paths, "prova")
+    output = tmp_path / "page-cycle.pdf"
+    config = motor.Config(str(tmp_path), saida=str(output), modo="prova", capa_mosaico=False)
+
+    result = motor.ciclar_preview_pagina(config, plan, 2, 720)
+    motor.exportar(config, result.plan)
+
+    with pymupdf.open(output) as pdf:
+        page = pdf[1]
+        scale = 720 / page.rect.width
+        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+    assert result.thumbnail.size == (pixmap.width, pixmap.height)
+    assert result.thumbnail.tobytes() == pixmap.samples
+
+
+def test_page_cycle_reports_selected_unreadable_file_without_opening_other_pages(
+    tmp_path: Path, image_factory, monkeypatch,
+):
+    from provas import motor
+
+    paths = tuple(image_factory(f"arquivo-{index}.jpg", size=(360, 240)) for index in range(1, 5))
+    plan = _page_cycle_plan(paths, "fotolivro")
+    opened: list[str] = []
+
+    def unreadable(photo_id: str) -> Image.Image:
+        opened.append(photo_id)
+        raise OSError("arquivo de imagem ilegível")
+
+    monkeypatch.setattr(motor, "_open_photo", unreadable)
+
+    with pytest.raises(OSError, match="arquivo de imagem ilegível"):
+        motor.ciclar_preview_pagina(motor.Config(str(tmp_path), modo="fotolivro"), plan, 2, 420)
+    assert opened == [plan.pages[1].photo_ids[0]]
+
+
+def test_page_cycle_honors_cancellation_before_opening_any_photo(
+    tmp_path: Path, image_factory, monkeypatch,
+):
+    from provas import motor
+
+    paths = tuple(image_factory(f"cancelar-{index}.jpg", size=(360, 240)) for index in range(1, 5))
+    plan = _page_cycle_plan(paths, "prova")
+    opened: list[str] = []
+    monkeypatch.setattr(motor, "_open_photo", lambda photo_id: opened.append(photo_id))
+    cancelled = threading.Event()
+    cancelled.set()
+
+    with pytest.raises(motor.Cancelado):
+        motor.ciclar_preview_pagina(
+            motor.Config(str(tmp_path), modo="prova"), plan, 2, 420, cancelar=cancelled,
+        )
+    assert opened == []

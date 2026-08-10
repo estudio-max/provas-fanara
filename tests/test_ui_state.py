@@ -705,6 +705,48 @@ def test_workers_publish_uniform_signals_and_honor_cancellation(qapp, tmp_path: 
     )
 
 
+def test_page_cycle_worker_emits_result_and_never_completes_after_cancellation(qapp, tmp_path: Path, plan):
+    from provas import motor
+    from provas.ui.workers import PageCycleWorker
+
+    completed = []
+    cancelled = []
+    calls = []
+    cancel_event = threading.Event()
+    result = object()
+
+    def operation(config, supplied_plan, page_number, preview_width, *, cancelar):
+        calls.append((config, supplied_plan, page_number, preview_width, cancelar))
+        cancel_event.set()
+        return result
+
+    worker = PageCycleWorker(
+        Config(str(tmp_path)), plan, 1, 720, cancel_event=cancel_event, operation=operation,
+    )
+    worker.completed.connect(completed.append)
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.run()
+
+    assert calls == [(worker.config, plan, 1, 720, cancel_event)]
+    assert completed == []
+    assert cancelled == [True]
+
+
+def test_page_cycle_worker_reports_failures_in_portuguese(qapp, tmp_path: Path, plan):
+    from provas.ui.workers import PageCycleWorker
+
+    failures = []
+
+    def operation(*_args, **_kwargs):
+        raise OSError("arquivo de imagem ilegível")
+
+    worker = PageCycleWorker(Config(str(tmp_path)), plan, 1, 420, operation=operation)
+    worker.failed.connect(failures.append)
+    worker.run()
+
+    assert failures == ["Não foi possível atualizar a página: arquivo de imagem ilegível"]
+
+
 def test_resize_hides_diagnostics_before_sacrificing_preview(qapp):
     from provas.ui import MainWindow
 

@@ -42,6 +42,9 @@ class EditorialWorker(QObject):
     def _execute(self) -> Any:
         raise NotImplementedError
 
+    def _error_message(self, exc: Exception) -> str:
+        return str(exc) or exc.__class__.__name__
+
     @Slot()
     def run(self) -> None:
         with self._run_lock:
@@ -56,7 +59,7 @@ class EditorialWorker(QObject):
         except motor.Cancelado:
             self.cancelled.emit()
         except Exception as exc:  # the controller turns details into an actionable banner
-            self.failed.emit(str(exc) or exc.__class__.__name__)
+            self.failed.emit(self._error_message(exc))
         else:
             if self._is_cancelled():
                 self.cancelled.emit()
@@ -108,6 +111,40 @@ class PreviewWorker(EditorialWorker):
             progresso=self._progress,
             cancelar=self.cancel_event,
         )
+
+
+class PageCycleWorker(EditorialWorker):
+    """Cycle and render exactly one internal page on the worker thread."""
+
+    def __init__(
+        self,
+        config: Config,
+        plan: BookPlan,
+        page_number: int,
+        preview_width: int,
+        cancel_event: threading.Event | None = None,
+        *,
+        operation: Callable[..., object] = motor.ciclar_preview_pagina,
+    ) -> None:
+        super().__init__(cancel_event)
+        self.config = config
+        self.plan = plan
+        self.page_number = page_number
+        self.preview_width = preview_width
+        self.operation = operation
+
+    def _execute(self) -> object:
+        return self.operation(
+            self.config,
+            self.plan,
+            self.page_number,
+            self.preview_width,
+            cancelar=self.cancel_event,
+        )
+
+    def _error_message(self, exc: Exception) -> str:
+        detail = str(exc) or exc.__class__.__name__
+        return f"Não foi possível atualizar a página: {detail}"
 
 
 class ExportWorker(EditorialWorker):

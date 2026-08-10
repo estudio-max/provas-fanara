@@ -17,6 +17,7 @@ from PIL import Image
 from . import capas, documento, imagens, preview, tema
 from .analise import AnalysisResult, analisar_fotos
 from .capa_classica import ClassicCrop, classic_photo_target, render_classic_cover
+from .ciclo_paginas import ciclar_pagina
 from .compositor import compose, validate_plan
 from .identidade_capa import CoverWarning, IdentityData
 from .modelos import BookPlan, PhotoInfo
@@ -142,6 +143,15 @@ class PlanAnalysisResult:
     plan: BookPlan
     photos: tuple[PhotoInfo, ...]
     failures: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class PageCycleResult:
+    """The isolated page replacement and its detached raster preview."""
+
+    plan: BookPlan
+    page_number: int
+    thumbnail: Image.Image
 
 
 class Cancelado(Exception):
@@ -319,6 +329,117 @@ def _prepare_render_assets(
         if watermark is not None:
             watermark.close()
     return assets, analysis
+
+
+def _open_photo(photo_id: str) -> Image.Image:
+    """Open a planned source without requiring a session-wide analysis pass."""
+    path = os.fspath(photo_id)
+    return imagens.abrir(imagens.Foto(path, os.path.splitext(os.path.basename(path))[0]))
+
+
+def _page_cycle_watermark(config: Config, mode: str) -> Image.Image | None:
+    if mode != "prova" or not config.marca_dagua or config.marca_opacidade <= 0:
+        return None
+    logo_path = config.logo.strip()
+    if logo_path and os.path.exists(logo_path):
+        logo: Image.Image | None = None
+        try:
+            logo = imagens.carregar_logo(logo_path)
+            return imagens.logo_branco(logo)
+        except (OSError, SyntaxError, ValueError):
+            pass
+        finally:
+            if logo is not None:
+                logo.close()
+    fallback = f"{config.estudio} · PROVA" if config.estudio.strip() else "PROVA PARA SELEÇÃO"
+    return imagens.marca_textual(fallback)
+
+
+def _selected_page(plan: BookPlan, page_number: int):
+    for page in plan.pages:
+        if page.number == page_number:
+            return page
+    raise ValueError(f"Página {page_number} não encontrada no plano.")
+
+
+def _prepare_page_cycle_assets(
+    config: Config,
+    plan: BookPlan,
+    page_number: int,
+    cancelar: object | None,
+) -> tuple[dict[str, documento.RenderAsset], dict[str, float]]:
+    """Decode exactly one page's sources, retaining only encoded render assets."""
+    page = _selected_page(plan, page_number)
+    photo_ids = tuple(dict.fromkeys(page.photo_ids))
+    dpi, quality = QUALIDADES.get(config.qualidade, QUALIDADES["normal"])
+    max_side = max(640, round(max(tema.A4_PAISAGEM) / 72 * dpi))
+    watermark = _page_cycle_watermark(config, plan.mode)
+    assets: dict[str, documento.RenderAsset] = {}
+    ratios: dict[str, float] = {}
+    try:
+        for photo_id in photo_ids:
+            _avisar(None, 0, 1, "", cancelar)
+            source = _open_photo(photo_id)
+            resized = source
+            page_image = source
+            try:
+                ratios[photo_id] = source.width / source.height
+                resized = imagens.redimensionar(source, max_side)
+                page_image = resized
+                if watermark is not None:
+                    page_image = imagens.aplicar_marca_dagua(
+                        resized, watermark, config.marca_largura, config.marca_opacidade,
+                    )
+                assets[photo_id] = documento.RenderAsset(
+                    photo_id,
+                    os.path.splitext(os.path.basename(photo_id))[0],
+                    _codificar(page_image, quality),
+                    page_image.width,
+                    page_image.height,
+                )
+            finally:
+                seen: set[int] = set()
+                for image in (page_image, resized, source):
+                    if id(image) not in seen:
+                        image.close()
+                        seen.add(id(image))
+            _avisar(None, 1, 1, "", cancelar)
+    finally:
+        if watermark is not None:
+            watermark.close()
+    return assets, ratios
+
+
+def ciclar_preview_pagina(
+    config: Config,
+    plan: BookPlan,
+    page_number: int,
+    preview_width: int,
+    *,
+    cancelar: object | None = None,
+) -> PageCycleResult:
+    """Cycle and rasterize one internal page without touching the rest of the plan."""
+    if _cancelled(cancelar):
+        raise Cancelado()
+    config = config.com_padroes()
+    assets, ratios = _prepare_page_cycle_assets(config, plan, page_number, cancelar)
+    if _cancelled(cancelar):
+        raise Cancelado()
+    cycled_plan = ciclar_pagina(plan, page_number, ratios)
+    cached_thumbnail = preview.render_page_thumbnail(
+        cycled_plan,
+        page_number,
+        assets,
+        preview_width,
+        document_factory=lambda: _new_editorial_document(config, cycled_plan.mode),
+        style_fingerprint=_render_style_fingerprint(config, cycled_plan.mode, cycled_plan.seed),
+    )
+    # The preview cache owns its image; the Qt result must not share that mutable resource.
+    thumbnail = cached_thumbnail.copy()
+    if _cancelled(cancelar):
+        thumbnail.close()
+        raise Cancelado()
+    return PageCycleResult(cycled_plan, page_number, thumbnail)
 
 
 def _logo_document(
