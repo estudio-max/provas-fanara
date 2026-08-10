@@ -168,7 +168,8 @@ class CoverDialog(QDialog):
 
     def _update_action(self) -> None:
         self.replace_button.setEnabled(
-            self.remaining_list.currentRow() >= 0
+            not self._submitted
+            and self.remaining_list.currentRow() >= 0
             and (self.single_selection or self.selected_list.currentRow() >= 0)
         )
 
@@ -178,14 +179,14 @@ class CoverDialog(QDialog):
         source = self.remaining_list.currentRow()
         if source < 0:
             return
+        slot = self.selected_list.currentRow()
+        if not self.single_selection and slot < 0:
+            return
         self._submitted = True
         self.replace_button.setEnabled(False)
         if self.single_selection:
             self.single_photo_selected.emit(self._remaining[source])
             self.accept()
-            return
-        slot = self.selected_list.currentRow()
-        if slot < 0:
             return
         self.replacement_requested.emit(slot, self._remaining[source])
         self.accept()

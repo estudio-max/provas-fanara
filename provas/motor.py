@@ -106,15 +106,33 @@ class PreviewResult(tuple):
     """Tuple-compatible thumbnails carrying non-blocking cover diagnostics."""
 
     warnings: tuple[CoverWarning, ...]
+    classic_photo_id: str
+    classic_photo_target: tuple[int, int] | None
 
     def __new__(
         cls,
         images: list[Image.Image] | tuple[Image.Image, ...],
         warnings: tuple[CoverWarning, ...] = (),
+        *,
+        classic_photo_id: str = "",
+        classic_photo_target: tuple[int, int] | None = None,
     ) -> "PreviewResult":
         result = super().__new__(cls, images)
         result.warnings = tuple(warnings)
+        result.classic_photo_id = str(classic_photo_id)
+        result.classic_photo_target = (
+            tuple(map(int, classic_photo_target))
+            if classic_photo_target is not None
+            else None
+        )
         return result
+
+
+@dataclass(frozen=True)
+class _CoverRenderResult:
+    warnings: tuple[CoverWarning, ...] = ()
+    classic_photo_id: str = ""
+    classic_photo_target: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -402,6 +420,8 @@ def gerar_preview(
     # Surface the shared logo preflight even when the project intentionally has
     # no cover; the document renderer owns and closes every decoded logo.
     cover_warnings = _logo_document(config)[3]
+    classic_photo_id = ""
+    classic_target: tuple[int, int] | None = None
     has_cover_source = bool(analysis.photos) if config.estilo_capa == "classica" else bool(
         plan.cover_photo_ids
     )
@@ -416,7 +436,9 @@ def gerar_preview(
                 {photo.id: photo for photo in analysis.photos},
             )
             if rendered is not None:
-                cover_warnings = rendered
+                cover_warnings = rendered.warnings
+                classic_photo_id = rendered.classic_photo_id
+                classic_target = rendered.classic_photo_target
                 page = cover_document.pdf[0]
                 scale = width / page.rect.width
                 pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
@@ -447,7 +469,12 @@ def gerar_preview(
             f"Prévia… página {index}/{len(plan.pages)}",
             cancelar,
         )
-    return PreviewResult(thumbnails, cover_warnings)
+    return PreviewResult(
+        thumbnails,
+        cover_warnings,
+        classic_photo_id=classic_photo_id,
+        classic_photo_target=classic_target,
+    )
 
 
 def _render_cover(
@@ -455,7 +482,7 @@ def _render_cover(
     config: Config,
     plan: BookPlan,
     photos: dict[str, PhotoInfo],
-) -> tuple[CoverWarning, ...] | None:
+) -> _CoverRenderResult | None:
     if not config.capa_mosaico:
         return None
     selected = [photos[photo_id] for photo_id in plan.cover_photo_ids if photo_id in photos]
@@ -463,6 +490,8 @@ def _render_cover(
         return None
     cover_photos: list[capas.CoverPhoto] = []
     classic_source: Image.Image | None = None
+    classic_photo_id = ""
+    classic_target: tuple[int, int] | None = None
     try:
         width = round(doc.tamanho[0] / 72 * DPI_MOSAICO)
         height = round(doc.tamanho[1] / 72 * DPI_MOSAICO)
@@ -477,6 +506,8 @@ def _render_cover(
             photo_id = capas.selecionar_foto_classica(
                 tuple(photos.values()), config.foto_capa_id, crop, target_size
             )
+            classic_photo_id = photo_id
+            classic_target = target_size
             info = photos[photo_id]
             classic_source = imagens.abrir(imagens.Foto(info.path, info.label))
             cover = render_classic_cover(
@@ -536,7 +567,11 @@ def _render_cover(
                     if warning.code not in warning_codes:
                         warnings.append(warning)
                         warning_codes.add(warning.code)
-            return tuple(warnings)
+            return _CoverRenderResult(
+                tuple(warnings),
+                classic_photo_id,
+                classic_target,
+            )
         finally:
             cover.imagem.close()
     finally:
@@ -626,7 +661,8 @@ def exportar(
     destination = config.saida
     temporary = _new_sibling_temp(destination)
     doc: documento.Documento | None = None
-    cover_rendered: tuple[CoverWarning, ...] | None = None
+    cover_rendered: _CoverRenderResult | None = None
+    cover_warnings: tuple[CoverWarning, ...] = ()
     cover_created = False
     try:
         doc = _new_editorial_document(config, plan.mode)
@@ -635,7 +671,9 @@ def exportar(
         )
         cover_created = cover_rendered is not None
         if cover_rendered is None:
-            cover_rendered = tuple(getattr(doc, "cover_warnings", ()))
+            cover_warnings = tuple(getattr(doc, "cover_warnings", ()))
+        else:
+            cover_warnings = cover_rendered.warnings
         templates = {template.id: template for template in catalog()}
         total = len(plan.pages)
         for index, page_plan in enumerate(plan.pages, start=1):
@@ -668,7 +706,7 @@ def exportar(
         photo_count,
         len(plan.pages),
         list(analysis.failures),
-        cover_rendered or (),
+        cover_warnings,
     )
 
 

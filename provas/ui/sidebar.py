@@ -185,6 +185,7 @@ class WorkflowSidebar(QFrame):
         self.crop_button.setAccessibleName("Ajustar enquadramento")
         self.crop_button.setToolTip("Reposicionar e ampliar a fotografia da Capa Clássica")
         self.crop_button.setEnabled(False)
+        self.crop_button.setProperty("ready", False)
         self.crop_button.clicked.connect(self.crop_requested)
         layout.addWidget(self.crop_button)
 
@@ -321,7 +322,7 @@ class WorkflowSidebar(QFrame):
         self.cover_button.setEnabled(not busy and self.cover_button.property("ready") is True)
         self.crop_button.setEnabled(
             not busy
-            and self.cover_button.property("ready") is True
+            and self.crop_button.property("ready") is True
             and self.cover_style.currentData() == "classica"
         )
         for control in (
@@ -342,6 +343,12 @@ class WorkflowSidebar(QFrame):
 
     def set_cover_ready(self, ready: bool) -> None:
         self.cover_button.setProperty("ready", ready)
+        if not ready:
+            self.crop_button.setProperty("ready", False)
+        self._update_cover_actions()
+
+    def set_crop_ready(self, ready: bool) -> None:
+        self.crop_button.setProperty("ready", ready)
         self._update_cover_actions()
 
     def _update_cover_actions(self) -> None:
@@ -349,5 +356,7 @@ class WorkflowSidebar(QFrame):
         available = ready and not self.cancel_button.isEnabled()
         self.cover_button.setEnabled(available)
         self.crop_button.setEnabled(
-            available and self.cover_style.currentData() == "classica"
+            self.crop_button.property("ready") is True
+            and not self.cancel_button.isEnabled()
+            and self.cover_style.currentData() == "classica"
         )

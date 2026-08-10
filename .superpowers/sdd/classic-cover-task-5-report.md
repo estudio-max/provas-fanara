@@ -2,8 +2,10 @@
 
 ## Status
 
-Implementação concluída sobre a base `2259baa640d4321c19d53213ed8a6456e922d619`,
-restrita à seleção única e ao editor transacional de recorte da Capa Clássica.
+Implementação e correções de review concluídas sobre a base
+`2259baa640d4321c19d53213ed8a6456e922d619`, restritas à seleção única e ao editor
+transacional de recorte da Capa Clássica. O primeiro commit da Task 5 foi
+`0257eef9855e2678ce0b54bcd641b9d08e0eed5f`.
 
 ## RED → GREEN
 
@@ -16,11 +18,26 @@ restrita à seleção única e ao editor transacional de recorte da Capa Clássi
   seleções.
 - GREEN focado: 8 testes passaram com o filtro
   `classic or crop or single_selection or workers_publish`.
-- GREEN da UI: `python -m pytest tests/test_ui_state.py -q` — 42 passaram.
+- GREEN da UI original: `python -m pytest tests/test_ui_state.py -q` — 42 passaram.
 - Regressões: `python -m pytest tests/test_capa_classica.py tests/test_projeto.py
   tests/test_motor_editorial.py -q` — 58 passaram.
 - `python -m compileall -q provas/ui tests/test_ui_state.py` passou.
 - `git diff --check` passou.
+
+### Correções de review
+
+- RED motor: o preview renderizava a foto automática correta, mas `PreviewResult` não
+  tinha `classic_photo_id` nem o target A4 efetivo.
+- RED transacional: mudar o zoom poderia alterar o ranking automático; Apply precisava
+  fixar o ID realmente exibido junto com foco/zoom, enquanto Cancel devia manter
+  `foto_capa_id` vazio.
+- RED geométrico: `CropDialog(path, crop, (1473, 904))` tratava o target como parent e
+  o canvas usava o default de design em vez do target inteiro do renderer.
+- RED multi-slot: duplo clique antes de escolher slot consumia `_submitted` e impedia a
+  seleção válida seguinte.
+- GREEN focado: 1/1 no motor e 8/8 na UI para os quatro cenários acima.
+- Regressão final: `python -m pytest tests/test_ui_state.py tests/test_capa_classica.py
+  tests/test_motor_editorial.py tests/test_projeto.py -q` — 105 passaram.
 
 O lote que também incluía `tests/test_end_to_end.py` excedeu o timeout porque ficou
 preso no caso legado `visual_qa.py --case curvas-editoriais`. Os dois processos exatos
@@ -36,6 +53,16 @@ foram encerrados; E2E visual/packaging final permanece fora do escopo desta task
 - Trocar a foto clássica restaura o recorte automático local dessa foto.
 - O canvas usa `crop_box`/`resolve_classic_crop_box`, limita foco pela geometria,
   mantém a moldura preenchida e aceita arraste e setas.
+- `_render_cover` devolve metadata transitória com o ID clássico realmente usado e o
+  tuple inteiro retornado por `classic_photo_target(width, height)` no documento A4.
+- `PreviewResult` transporta essa metadata sem persistir o fallback automático; a
+  `MainWindow` só a instala após preview bem-sucedido.
+- Sem metadata de preview a edição permanece desabilitada; chamada direta solicita uma
+  prévia em vez de adivinhar um caminho.
+- O editor abre exatamente a foto e o target do preview. Apply persiste atomicamente
+  esse ID exibido com foco/zoom/modo, tornando-o manual; Cancel não persiste nada.
+- O source box do canvas foi comparado por igualdade exata com
+  `resolve_classic_crop_box` usando o target do renderer `(1473, 904)`.
 - Zoom varia de 100% a 250%; o reset automático permanece em draft.
 - Aplicar emite uma vez, persiste e solicita uma única prévia. Cancelar, Esc e fechar
   não alteram o projeto.
@@ -58,7 +85,8 @@ Captura auxiliar da mesa:
 
 `C:\Users\estud\OneDrive\Imagens\RAW\provas-fanara\.worktrees\editorial-app\tmp\ui-qa\classic-cover-desk.png`
 
-Inspeção via `view_image`:
+As capturas foram refeitas após a correção geométrica, agora com target transitório
+`(1473, 904)`. Inspeção via `view_image`:
 
 - editor sem clipping; título, instrução, slider, percentual e ações integralmente
   visíveis;
@@ -76,9 +104,6 @@ automático + Aplicar gerou exatamente uma solicitação de prévia e o fechamen
 
 ## Considerações
 
-- Quando não há `foto_capa_id` manual, o editor usa a primeira fonte válida da ordem
-  persistida (seleção de capa/plano/projeto). A renderização final continua usando o
-  seletor automático aprovado do motor. Expor o ID automático efetivamente renderizado
-  no `PreviewResult` daria paridade explícita, mas alteraria o motor aprovado e ficou
-  fora desta Task 5.
-- Ícone Fanara, packaging e E2E final não foram implementados.
+- Não há concern funcional conhecido nos findings corrigidos: seleção, foto exibida,
+  persistência e geometria agora compartilham o resultado efetivo do mesmo render.
+- Ícone Fanara, packaging e E2E final não foram implementados, conforme escopo.

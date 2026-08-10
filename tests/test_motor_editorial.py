@@ -247,6 +247,43 @@ def test_classica_selection_uses_the_exact_integer_renderer_target(monkeypatch):
     ) == "safe"
 
 
+def test_classic_preview_exposes_effective_photo_and_exact_pdf_target(
+    tmp_path: Path, image_factory, monkeypatch
+):
+    from provas import capa_classica, capas, motor
+
+    first = image_factory("01-primeira-vertical.jpg", size=(600, 900))
+    automatic = image_factory("02-automatica-horizontal.jpg", size=(900, 600))
+    plan = BookPlan(
+        9,
+        "fotolivro",
+        (str(first),),
+        (
+            PagePlan(1, "single-portrait", (str(first),), "opening"),
+            PagePlan(2, "single-landscape", (str(automatic),), "ending"),
+        ),
+    )
+    monkeypatch.setattr(capas, "_classic_face_safe", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(capa_classica.enquadramento, "detect_faces", lambda _image: ())
+
+    preview = motor.gerar_preview(
+        motor.Config(str(tmp_path), modo="fotolivro", titulo="AURORA", estudio="FANARA"),
+        plan,
+        width=360,
+    )
+    document = motor._new_editorial_document(motor.Config(str(tmp_path)), "fotolivro")
+    try:
+        width = round(document.tamanho[0] / 72 * motor.DPI_MOSAICO)
+        height = round(document.tamanho[1] / 72 * motor.DPI_MOSAICO)
+        expected_target = capa_classica.classic_photo_target(width, height)
+    finally:
+        document.fechar()
+
+    assert preview.classic_photo_id == str(automatic)
+    assert preview.classic_photo_target == expected_target
+    assert preview.classic_photo_target == (1473, 904)
+
+
 def test_classica_cover_fields_participate_in_the_render_fingerprint(tmp_path: Path):
     from provas import motor
 

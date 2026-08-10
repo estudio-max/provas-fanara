@@ -194,6 +194,8 @@ def test_classic_crop_action_requires_ready_classic_project(qapp):
     assert not sidebar.crop_button.isEnabled()
 
     sidebar.set_cover_ready(True)
+    assert not sidebar.crop_button.isEnabled()
+    sidebar.set_crop_ready(True)
     assert sidebar.crop_button.isEnabled()
 
     sidebar.set_cover_style("mosaico")
@@ -921,6 +923,30 @@ def test_cover_dialog_single_selection_needs_no_cover_slot(qapp, image_factory):
     assert selected == [alternatives[-1]]
 
 
+def test_cover_dialog_premature_double_click_does_not_consume_valid_multi_selection(
+    qapp, image_factory
+):
+    from provas.ui import CoverDialog
+
+    selected = tuple(str(image_factory(f"slot-{index}.jpg")) for index in range(2))
+    remaining = (str(image_factory("nova.jpg")),)
+    dialog = CoverDialog(selected, remaining)
+    replacements: list[tuple[int, str]] = []
+    dialog.replacement_requested.connect(
+        lambda slot, photo_id: replacements.append((slot, photo_id))
+    )
+    dialog.show()
+    qapp.processEvents()
+
+    dialog.selected_list.setCurrentRow(-1)
+    dialog.remaining_list.setCurrentRow(0)
+    dialog.remaining_list.itemDoubleClicked.emit(dialog.remaining_list.item(0))
+    dialog.selected_list.setCurrentRow(1)
+    dialog.replace_button.click()
+
+    assert replacements == [(1, remaining[0])]
+
+
 def _drag_crop(canvas, dx: int, dy: int, qapp) -> None:
     start = canvas.rect().center()
     end = start + QPoint(dx, dy)
@@ -931,12 +957,12 @@ def _drag_crop(canvas, dx: int, dy: int, qapp) -> None:
 
 
 def test_crop_cancel_keeps_committed_value_transactional(qapp, image_factory):
-    from provas.capa_classica import ClassicCrop
+    from provas.capa_classica import ClassicCrop, classic_photo_target
     from provas.ui.crop_dialog import CropDialog
 
     path = str(image_factory("crop-cancel.jpg", size=(1200, 800)))
     before = ClassicCrop(0.5, 0.5, 1.35, "manual")
-    dialog = CropDialog(path, before)
+    dialog = CropDialog(path, before, classic_photo_target(1754, 1240))
     applied: list[tuple[float, float, float]] = []
     dialog.applied.connect(lambda x, y, zoom: applied.append((x, y, zoom)))
     dialog.show()
@@ -956,7 +982,8 @@ def test_crop_apply_emits_once_and_commits_bounded_draft(qapp, image_factory):
 
     path = str(image_factory("crop-apply.jpg", size=(900, 1400)))
     before = ClassicCrop()
-    dialog = CropDialog(path, before)
+    target = classic_photo_target(1754, 1240)
+    dialog = CropDialog(path, before, target)
     applied: list[tuple[float, float, float]] = []
     dialog.applied.connect(lambda x, y, zoom: applied.append((x, y, zoom)))
     dialog.show()
@@ -964,7 +991,7 @@ def test_crop_apply_emits_once_and_commits_bounded_draft(qapp, image_factory):
 
     dialog.zoom_slider.setValue(250)
     _drag_crop(dialog.canvas, -500, 500, qapp)
-    box = crop_box(dialog.canvas.source_size, classic_photo_target(), dialog.value)
+    box = crop_box(dialog.canvas.source_size, target, dialog.value)
     width, height = dialog.canvas.source_size
     assert 0 <= box.left < box.right <= width
     assert 0 <= box.top < box.bottom <= height
@@ -977,12 +1004,12 @@ def test_crop_apply_emits_once_and_commits_bounded_draft(qapp, image_factory):
 
 
 def test_crop_automatic_reset_is_local_until_apply(qapp, image_factory):
-    from provas.capa_classica import ClassicCrop
+    from provas.capa_classica import ClassicCrop, classic_photo_target
     from provas.ui.crop_dialog import CropDialog
 
     path = str(image_factory("crop-reset.jpg", size=(1200, 800)))
     before = ClassicCrop(0.25, 0.7, 2.0, "manual")
-    dialog = CropDialog(path, before)
+    dialog = CropDialog(path, before, classic_photo_target(1754, 1240))
     dialog.show()
     qapp.processEvents()
 
@@ -994,6 +1021,120 @@ def test_crop_automatic_reset_is_local_until_apply(qapp, image_factory):
     assert dialog.zoom_label.text() == "100%"
     dialog.reject()
     assert dialog.committed_value == before
+
+
+def test_crop_canvas_uses_exact_preview_target_for_renderer_source_box(
+    qapp, image_factory, monkeypatch
+):
+    from provas.capa_classica import ClassicCrop, resolve_classic_crop_box
+    from provas.ui.crop_dialog import CropDialog
+
+    path = str(image_factory("crop-target.jpg", size=(900, 1400)))
+    target = (1473, 904)
+    crop = ClassicCrop(0.32, 0.72, 1.6, "manual")
+    monkeypatch.setattr("provas.ui.crop_dialog.enquadramento.detect_faces", lambda _image: ())
+
+    dialog = CropDialog(path, crop, target)
+
+    assert dialog.canvas.target_size == target
+    assert dialog.canvas.source_box == resolve_classic_crop_box(
+        dialog.canvas.source_size,
+        target,
+        crop,
+        (),
+    )
+
+
+def test_classic_crop_applies_preview_photo_atomically_when_new_crop_would_rerank(
+    qapp, tmp_path: Path, image_factory, monkeypatch
+):
+    from provas import capas
+    from provas.capa_classica import ClassicCrop
+    from provas.modelos import PhotoInfo
+    from provas.motor import PreviewResult
+    from provas.ui import MainWindow
+
+    first = str(image_factory("01-first.jpg", color=(190, 40, 40), size=(900, 600)))
+    automatic = str(image_factory("02-auto.jpg", color=(40, 90, 190), size=(900, 600)))
+    photos = (
+        PhotoInfo(first, first, "first", 900, 600, 0, quality=1.0),
+        PhotoInfo(automatic, automatic, "auto", 900, 600, 1, quality=0.1),
+    )
+    target = (1473, 904)
+
+    def face_safe(photo, crop, _target):
+        return photo.id == (automatic if crop.zoom < 2 else first)
+
+    monkeypatch.setattr(capas, "_classic_face_safe", face_safe)
+    assert capas.selecionar_foto_classica(
+        photos, "", ClassicCrop(zoom=1), target
+    ) == automatic
+    assert capas.selecionar_foto_classica(
+        photos, "", ClassicCrop(zoom=2.5), target
+    ) == first
+    monkeypatch.setattr("provas.ui.crop_dialog.enquadramento.detect_faces", lambda _image: ())
+
+    plan = BookPlan(
+        7,
+        "prova",
+        (first,),
+        (
+            PagePlan(1, "solo-landscape", (first,), "opening"),
+            PagePlan(2, "solo-landscape", (automatic,), "ending"),
+        ),
+    )
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan, photos=photos)
+    preview = PreviewResult(
+        tuple(Image.new("RGB", (420, 297)) for _ in range(3)),
+        classic_photo_id=automatic,
+        classic_photo_target=target,
+    )
+    window.apply_preview_ready(preview)
+
+    assert window.project_state.config.foto_capa_id == ""
+    window.open_crop_dialog()
+    qapp.processEvents()
+    dialog = window._crop_dialog
+    assert dialog is not None
+    assert dialog.photo_path == automatic
+    assert dialog.canvas.target_size == target
+    dialog.reject()
+    qapp.processEvents()
+    assert window.project_state.config.foto_capa_id == ""
+
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+    window.open_crop_dialog()
+    qapp.processEvents()
+    dialog = window._crop_dialog
+    assert dialog is not None
+    dialog.zoom_slider.setValue(250)
+    dialog.apply_button.click()
+
+    assert window.project_state.config.foto_capa_id == automatic
+    assert window.project_state.config.capa_zoom == 2.5
+    assert window.project_state.config.capa_enquadramento == "manual"
+    assert preview_requests == [True]
+
+
+def test_crop_without_successful_preview_requests_one_instead_of_guessing(
+    qapp, tmp_path: Path, plan, monkeypatch
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.open_crop_dialog()
+
+    assert not window.sidebar.crop_button.isEnabled()
+    assert window._crop_dialog is None
+    assert preview_requests == [True]
 
 
 def test_close_requests_cancellation_without_waiting_for_worker(qapp):

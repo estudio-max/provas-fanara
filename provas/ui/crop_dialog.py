@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 from .. import enquadramento, imagens
 from ..capa_classica import (
     ClassicCrop,
-    classic_photo_target,
     crop_box,
     resolve_classic_crop_box,
 )
@@ -35,6 +34,7 @@ class CropCanvas(QWidget):
         self,
         image,
         crop: ClassicCrop,
+        target_size: tuple[int, int],
         faces: tuple[enquadramento.FaceBox, ...] = (),
         parent: QWidget | None = None,
     ) -> None:
@@ -51,6 +51,13 @@ class CropCanvas(QWidget):
         self._image = _to_qimage(image)
         if self._image.isNull():
             raise ValueError("A fotografia da capa não pôde ser lida.")
+        try:
+            target = tuple(map(int, target_size))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("O tamanho do recorte da capa é inválido.") from exc
+        if len(target) != 2 or min(target) <= 0:
+            raise ValueError("O tamanho do recorte da capa é inválido.")
+        self._target_size = target
         self._faces = tuple(faces)
         self._crop = self._normalized(crop)
         self._last_position: QPoint | None = None
@@ -63,6 +70,14 @@ class CropCanvas(QWidget):
     def source_size(self) -> tuple[int, int]:
         return (self._image.width(), self._image.height())
 
+    @property
+    def target_size(self) -> tuple[int, int]:
+        return self._target_size
+
+    @property
+    def source_box(self):
+        return self._display_box()
+
     @staticmethod
     def _normalized(crop: ClassicCrop) -> ClassicCrop:
         return ClassicCrop(
@@ -74,7 +89,7 @@ class CropCanvas(QWidget):
 
     def _frame_rect(self) -> QRectF:
         area = QRectF(self.rect()).adjusted(12, 12, -12, -12)
-        target_width, target_height = classic_photo_target()
+        target_width, target_height = self._target_size
         ratio = target_width / target_height
         width = area.width()
         height = width / ratio
@@ -92,11 +107,11 @@ class CropCanvas(QWidget):
         if self._crop.mode == "automatico":
             return resolve_classic_crop_box(
                 self.source_size,
-                classic_photo_target(),
+                self._target_size,
                 self._crop,
                 self._faces,
             )
-        return crop_box(self.source_size, classic_photo_target(), self._crop)
+        return crop_box(self.source_size, self._target_size, self._crop)
 
     def _effective_manual_crop(self) -> ClassicCrop:
         box = self._display_box()
@@ -112,7 +127,7 @@ class CropCanvas(QWidget):
         width, height = self.source_size
         centered = crop_box(
             self.source_size,
-            classic_photo_target(),
+            self._target_size,
             ClassicCrop(0.5, 0.5, zoom, "manual"),
         )
         margin_x = centered.width / (2 * width)
@@ -148,7 +163,7 @@ class CropCanvas(QWidget):
         if frame.width() <= 0 or frame.height() <= 0:
             return
         current = self._effective_manual_crop()
-        box = crop_box(self.source_size, classic_photo_target(), current)
+        box = crop_box(self.source_size, self._target_size, current)
         width, height = self.source_size
         focus_x = current.focus_x - dx * box.width / (frame.width() * width)
         focus_y = current.focus_y - dy * box.height / (frame.height() * height)
@@ -221,6 +236,7 @@ class CropDialog(QDialog):
         self,
         photo_path: str,
         value: ClassicCrop,
+        target_size: tuple[int, int],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -229,6 +245,7 @@ class CropDialog(QDialog):
         self.setModal(True)
         self.resize(760, 570)
         self.setMinimumSize(620, 500)
+        self.photo_path = str(photo_path)
         self._committed_value = value
         self._applied = False
 
@@ -264,7 +281,7 @@ class CropDialog(QDialog):
         help_text.setWordWrap(True)
         root.addWidget(help_text)
 
-        self.canvas = CropCanvas(image, value, faces)
+        self.canvas = CropCanvas(image, value, target_size, faces)
         root.addWidget(self.canvas, 1)
 
         controls = QHBoxLayout()

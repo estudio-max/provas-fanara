@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
         self._analysis_failures: tuple[tuple[str, str], ...] = ()
         self._cover_dialog: CoverDialog | None = None
         self._crop_dialog: CropDialog | None = None
+        self._classic_preview_photo_id = ""
+        self._classic_preview_target: tuple[int, int] | None = None
 
         self._build()
         self._connect()
@@ -446,6 +448,8 @@ class MainWindow(QMainWindow):
     def request_preview(self) -> None:
         if self.project_state is None or self.is_busy:
             return
+        self._classic_preview_photo_id = ""
+        self._classic_preview_target = None
         event = threading.Event()
         self.begin_operation("Preparando a prévia…", event)
         worker = PreviewWorker(
@@ -465,6 +469,23 @@ class MainWindow(QMainWindow):
         warnings = tuple(getattr(previews, "warnings", ()))
         items = tuple(previews)  # type: ignore[arg-type]
         self.previews = items
+        self._classic_preview_photo_id = ""
+        self._classic_preview_target = None
+        if self.project_state.config.estilo_capa == "classica":
+            classic_photo_id = str(getattr(previews, "classic_photo_id", ""))
+            raw_target = getattr(previews, "classic_photo_target", None)
+            try:
+                classic_target = tuple(map(int, raw_target)) if raw_target is not None else None
+            except (TypeError, ValueError):
+                classic_target = None
+            if (
+                classic_photo_id
+                and classic_target is not None
+                and len(classic_target) == 2
+                and min(classic_target) > 0
+            ):
+                self._classic_preview_photo_id = classic_photo_id
+                self._classic_preview_target = classic_target
         self.preview_grid.set_previews(self.project_state.plan, items)
         self._end_operation()
         if warnings:
@@ -619,22 +640,6 @@ class MainWindow(QMainWindow):
         self._sync_actions()
         self.request_preview()
 
-    def _classic_crop_photo_path(self) -> str:
-        if self.project_state is None:
-            return ""
-        config = self.project_state.config
-        candidates = tuple(
-            dict.fromkeys(
-                (
-                    config.foto_capa_id,
-                    *self.project_state.plan.cover_photo_ids,
-                    *self.project_state.photo_paths,
-                    *(photo for page in self.project_state.plan.pages for photo in page.photo_ids),
-                )
-            )
-        )
-        return next((path for path in candidates if path and os.path.isfile(path)), "")
-
     def open_crop_dialog(self) -> None:
         if (
             self.project_state is None
@@ -642,10 +647,22 @@ class MainWindow(QMainWindow):
             or self.project_state.config.estilo_capa != "classica"
         ):
             return
-        photo_path = self._classic_crop_photo_path()
-        if not photo_path:
+        if (
+            not self.previews
+            or not self._classic_preview_photo_id
+            or self._classic_preview_target is None
+        ):
             self.set_status(
-                "A fotografia da Capa Clássica não está disponível. Escolha outra fotografia.",
+                "Prepare a prévia da Capa Clássica antes de ajustar o enquadramento.",
+                "idle",
+            )
+            self.request_preview()
+            return
+        photo_path = self._classic_preview_photo_id
+        target_size = self._classic_preview_target
+        if not os.path.isfile(photo_path):
+            self.set_status(
+                "A fotografia exibida na prévia não está mais disponível. Atualize a prévia.",
                 "error",
             )
             return
@@ -657,7 +674,7 @@ class MainWindow(QMainWindow):
             config.capa_enquadramento,
         )
         try:
-            dialog = CropDialog(photo_path, value, self)
+            dialog = CropDialog(photo_path, value, target_size, self)
         except ValueError as exc:
             self.set_status(str(exc), "error")
             return
@@ -667,6 +684,7 @@ class MainWindow(QMainWindow):
                 focus_y,
                 zoom,
                 mode=dialog.value.mode,
+                photo_id=dialog.photo_path,
             )
         )
         dialog.finished.connect(lambda _result: self._release_crop_dialog(dialog))
@@ -684,14 +702,26 @@ class MainWindow(QMainWindow):
         zoom: float,
         *,
         mode: str = "manual",
+        photo_id: str | None = None,
     ) -> None:
         """Persist only classic crop fields and render the unchanged plan once."""
         if self.project_state is None:
             raise ValueError("Analise as fotografias antes de ajustar a capa.")
         if mode not in {"automatico", "manual"}:
             raise ValueError("Enquadramento da capa inválido.")
+        selected_photo_id = (
+            self.project_state.config.foto_capa_id if photo_id is None else str(photo_id)
+        )
+        if selected_photo_id:
+            available = {
+                *self.project_state.photo_paths,
+                *(photo for page in self.project_state.plan.pages for photo in page.photo_ids),
+            }
+            if selected_photo_id not in available:
+                raise ValueError("A fotografia exibida não pertence a este projeto.")
         config = replace(
             self.project_state.config,
+            foto_capa_id=selected_photo_id,
             capa_foco_x=focus_x,
             capa_foco_y=focus_y,
             capa_zoom=zoom,
@@ -805,6 +835,13 @@ class MainWindow(QMainWindow):
         self.open_project_button.setEnabled(not self.is_busy)
         self.sidebar.analyze_button.setEnabled(has_folder and not self.is_busy)
         self.sidebar.set_cover_ready(bool(preview_ready))
+        self.sidebar.set_crop_ready(
+            bool(
+                preview_ready
+                and self._classic_preview_photo_id
+                and self._classic_preview_target is not None
+            )
+        )
         self.preview_grid.regenerate_button.setEnabled(bool(preview_ready and not self.is_busy))
         self.preview_grid.undo_button.setEnabled(
             bool(has_plan and self.project_state.previous_plan is not None and not self.is_busy)
