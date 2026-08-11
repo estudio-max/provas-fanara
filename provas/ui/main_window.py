@@ -1082,7 +1082,7 @@ class MainWindow(QMainWindow):
     def save_project_dialog(self) -> None:
         if self.project_state is None or self.is_busy:
             return
-        default = os.path.join(self.folder_path, "fanara-fotolivro.provas.json")
+        default = os.path.join(self.folder_path, f"{recursos.PRODUCT_NAME}.provas.json")
         path, _filter = QFileDialog.getSaveFileName(
             self,
             "Salvar projeto",

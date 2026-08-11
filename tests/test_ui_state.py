@@ -164,6 +164,32 @@ def test_open_project_dialog_is_accessible_and_uses_project_file_filter(
     assert window.project_state is not None
 
 
+def test_save_project_dialog_suggests_the_exact_product_filename(qapp, tmp_path: Path, monkeypatch):
+    from provas.recursos import PRODUCT_NAME
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.project_state = object()
+    window.folder_path = str(tmp_path)
+    captured: list[tuple[str, str, str]] = []
+
+    def choose(_parent, title, default, file_filter):
+        captured.append((title, default, file_filter))
+        return "", file_filter
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", choose)
+
+    window.save_project_dialog()
+
+    assert captured == [
+        (
+            "Salvar projeto",
+            str(tmp_path / f"{PRODUCT_NAME}.provas.json"),
+            f"Projeto {PRODUCT_NAME} (*.provas.json);;JSON (*.json)",
+        )
+    ]
+
+
 def test_sidebar_exposes_three_cover_styles_and_accessible_identity_fields(qapp):
     from provas.ui.sidebar import WorkflowSidebar
 
