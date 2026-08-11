@@ -159,9 +159,15 @@ def test_page_appearance_keeps_cover_photos_and_preview_pdf_identical(
 ):
     """Appearance is internal-only: the cover and JPEG streams never change."""
     session = _make_case(tmp_path, "aparencia", 6, "mixed")
+    styles = ("classica", "mosaico", "curvas_editoriais")
+    style = styles[(
+        ("branco", "cinza", "preto").index(background) * 4
+        + int(shadow) * 2
+        + ("prova", "fotolivro").index(mode)
+    ) % len(styles)]
     base_output = tmp_path / f"base-{mode}.pdf"
     base = motor.Config(
-        str(session), saida=str(base_output), modo=mode, estilo_capa="mosaico",
+        str(session), saida=str(base_output), modo=mode, estilo_capa=style,
         qualidade="leve", semente=817,
     )
     analysis = motor.analisar_plano(base)
@@ -1237,6 +1243,44 @@ def test_visual_qa_classic_case_builds_required_matrix(tmp_path: Path):
     assert len(tuple(tmp_path.glob("*-contact-sheet.png"))) == 6
     assert (tmp_path / "capa-classica-overview.png").is_file()
     assert all(path.stat().st_size > 0 for path in tmp_path.glob("*.png"))
+
+
+def test_visual_qa_page_appearance_builds_complete_matrix_and_ui_capture(tmp_path: Path):
+    environment = os.environ.copy()
+    environment["QT_QPA_PLATFORM"] = "offscreen"
+    environment["QT_SCALE_FACTOR"] = "1.25"
+    completed = subprocess.run(
+        [
+            sys.executable, str(ROOT / "tests" / "visual_qa.py"),
+            "--case", "aparencia-paginas", "--dpi", "120", "--output", str(tmp_path),
+        ],
+        cwd=ROOT, env=environment, capture_output=True, text=True, timeout=240, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    expected_stems = {
+        f"{background}-sombra-{shadow}-{mode}"
+        for background in ("branco", "cinza", "preto")
+        for shadow in ("off", "on")
+        for mode in ("prova", "fotolivro")
+    }
+    assert expected_stems == {
+        path.name.removesuffix("-contact-sheet.png")
+        for path in tmp_path.glob("*-contact-sheet.png")
+    }
+    assert (tmp_path / "aparencia-paginas-overview.png").is_file()
+    screenshot = tmp_path / "ui-aparencia-1093x614-125.png"
+    assert screenshot.is_file()
+    with Image.open(screenshot) as captured:
+        assert captured.size == (1093, 614)
+    qa_state = json.loads((tmp_path / "aparencia-paginas-qa.json").read_text(encoding="utf-8"))
+    assert qa_state["dpi"] == 120
+    assert qa_state["logical_size"] == [1093, 614]
+    assert qa_state["scale_factor"] == 1.25
+    assert {entry["cover_style"] for entry in qa_state["matrix"]} == {
+        "classica", "mosaico", "curvas_editoriais",
+    }
+    assert len(qa_state["matrix"]) == 12
 
 
 def test_visual_qa_page_cycle_captures_normal_busy_and_unavailable_controls(tmp_path: Path):

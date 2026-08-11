@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -21,6 +22,9 @@ CLASSIC_CASES = (
     ("zoom-100", "portrait", "manual", 0.5, 0.42, 1.0, "ÁLBUM DE FAMÍLIA"),
     ("zoom-250", "portrait", "manual", 0.5, 0.42, 2.5, "MEMÓRIAS DE UMA TARDE"),
 )
+PAGE_APPEARANCE_BACKGROUNDS = ("branco", "cinza", "preto")
+PAGE_APPEARANCE_MODES = ("prova", "fotolivro")
+PAGE_APPEARANCE_STYLES = ("classica", "mosaico", "curvas_editoriais")
 
 
 def render_pdf(
@@ -270,6 +274,159 @@ def build_classic_cases(output: Path, *, dpi: int = 120) -> tuple[Path, ...]:
     return tuple(sheets)
 
 
+def _appearance_style(background: str, shadow: bool, mode: str) -> str:
+    index = (
+        PAGE_APPEARANCE_BACKGROUNDS.index(background) * 4
+        + int(shadow) * 2
+        + PAGE_APPEARANCE_MODES.index(mode)
+    )
+    return PAGE_APPEARANCE_STYLES[index % len(PAGE_APPEARANCE_STYLES)]
+
+
+def _capture_page_appearance_ui(output: Path, photos: Path, plan, previews) -> dict[str, object]:
+    """Capture the approved native controls at the supported Windows scale."""
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import QApplication
+
+    from provas import motor
+    from provas.ui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    for font_name in (
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/segoeuil.ttf",
+        "C:/Windows/Fonts/seguisym.ttf",
+    ):
+        QFontDatabase.addApplicationFont(font_name)
+    app.setStyleSheet(
+        (Path(__file__).parents[1] / "provas" / "ui" / "theme.qss").read_text(encoding="utf-8")
+    )
+    window = MainWindow()
+    window.resize(1093, 614)
+    window.show()
+    app.processEvents()
+    try:
+        window.select_folder(str(photos))
+        window._draft_config = motor.Config(  # QA installs the already-rendered state synchronously.
+            str(photos), modo="prova", fundo_paginas="preto", sombra_fotos=True,
+            estilo_capa="classica", qualidade="leve", semente=9731,
+        )
+        window.apply_analysis_result(plan)
+        window.previews = tuple(image.copy() for image in previews)
+        window.preview_grid.set_previews(plan, window.previews)
+        window.sidebar.set_page_appearance("preto", True, emit=False)
+        window.sidebar.scroll_area.ensureWidgetVisible(window.sidebar.page_appearance_section_label)
+        app.processEvents()
+        target = output / "ui-aparencia-1093x614-125.png"
+        screenshot = window.grab()
+        if screenshot.size().width() != 1093 or screenshot.size().height() != 614:
+            screenshot = screenshot.scaled(1093, 614)
+        if not screenshot.save(str(target)):
+            raise OSError(f"não foi possível salvar a captura: {target}")
+        return {
+            "logical_size": [1093, 614],
+            "scale_factor": round(app.primaryScreen().devicePixelRatio(), 2),
+            "background": str(window.sidebar.page_background.currentData()),
+            "shadow": window.sidebar.photo_shadow.isChecked(),
+        }
+    finally:
+        window.close()
+        for image in window.previews:
+            image.close()
+
+
+def build_page_appearance_cases(output: Path, *, dpi: int = 120) -> tuple[Path, ...]:
+    """Render the 3×2×2 internal-page appearance matrix plus its native UI."""
+    from provas import motor
+
+    output.mkdir(parents=True, exist_ok=True)
+    fixtures = output / "_fixtures" / "fotos-mistas"
+    fixtures.mkdir(parents=True, exist_ok=True)
+    for index in range(8):
+        name = (
+            "FANARA_NOME_EXTREMAMENTE_LONGO_PARA_VALIDAR_LEGENDA_CENTRALIZADA_0001"
+            if index == 0 else f"FANARA_APARENCIA_{index + 1:02d}"
+        )
+        photo = fixtures / f"{name}.jpg"
+        _qa_photo(photo, index, "mistos")
+
+    sheets: list[Path] = []
+    matrix: list[dict[str, object]] = []
+    cover_hashes: dict[tuple[str, str], str] = {}
+    ui_plan = None
+    ui_previews = None
+    for background in PAGE_APPEARANCE_BACKGROUNDS:
+        for shadow in (False, True):
+            for mode in PAGE_APPEARANCE_MODES:
+                style = _appearance_style(background, shadow, mode)
+                stem = f"{background}-sombra-{'on' if shadow else 'off'}-{mode}"
+                pdf = output / f"{stem}.pdf"
+                config = motor.Config(
+                    str(fixtures), saida=str(pdf), titulo="Retratos Fanara",
+                    estudio="Estúdio Fanara", site="fanara.com.br", modo=mode,
+                    marca_dagua=mode == "prova", mostrar_codigos=mode == "prova",
+                    fundo_paginas=background, sombra_fotos=shadow, estilo_capa=style,
+                    qualidade="leve", semente=9731,
+                )
+                analysis = motor.analisar_plano(config)
+                previews = motor.gerar_preview(config, analysis.plan, width=360)
+                motor.exportar(config, analysis.plan)
+                try:
+                    with pymupdf.open(pdf) as document:
+                        for page_index, page in enumerate(document):
+                            scale = 360 / page.rect.width
+                            pixmap = page.get_pixmap(
+                                matrix=pymupdf.Matrix(scale, scale), alpha=False
+                            )
+                            rendered = Image.frombytes(
+                                "RGB", (pixmap.width, pixmap.height), pixmap.samples
+                            )
+                            try:
+                                if rendered.tobytes() != previews[page_index].tobytes():
+                                    raise AssertionError(
+                                        f"prévia diverge do PDF em {stem}, página {page_index + 1}"
+                                    )
+                            finally:
+                                rendered.close()
+                    cover_hash = hashlib.sha256(previews[0].tobytes()).hexdigest()
+                    prior = cover_hashes.setdefault((style, mode), cover_hash)
+                    if prior != cover_hash:
+                        raise AssertionError(
+                            f"aparência interna alterou a capa {style}: {stem}"
+                        )
+                    if ui_plan is None and background == "preto" and shadow and mode == "prova":
+                        ui_plan = analysis.plan
+                        ui_previews = tuple(image.copy() for image in previews)
+                finally:
+                    for image in previews:
+                        image.close()
+                _count, sheet = render_pdf(
+                    pdf, dpi=dpi, contact_sheet=output / f"{stem}-contact-sheet.png"
+                )
+                sheets.append(sheet)
+                matrix.append({
+                    "background": background,
+                    "shadow": shadow,
+                    "mode": mode,
+                    "cover_style": style,
+                    "pdf": pdf.name,
+                })
+
+    if ui_plan is None or ui_previews is None:
+        raise AssertionError("matriz não produziu o estado Preto + sombra + Prova")
+    try:
+        ui_state = _capture_page_appearance_ui(output, fixtures, ui_plan, ui_previews)
+    finally:
+        for image in ui_previews:
+            image.close()
+    _build_overview(sheets, output, "aparencia-paginas")
+    (output / "aparencia-paginas-qa.json").write_text(
+        json.dumps({"dpi": dpi, "matrix": matrix, **ui_state}, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return tuple(sheets)
+
+
 def build_page_cycle_case(output: Path, *, dpi: int = 120) -> Path:
     """Capture the per-page cycle affordance in its normal, busy and unavailable states."""
     from PySide6.QtGui import QFontDatabase
@@ -363,7 +520,10 @@ def build_page_cycle_case(output: Path, *, dpi: int = 120) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", type=Path, help="diretório que contém os PDFs E2E")
-    parser.add_argument("--case", choices=("curvas-editoriais", "capa-classica", "ciclo-paginas"))
+    parser.add_argument(
+        "--case",
+        choices=("curvas-editoriais", "capa-classica", "ciclo-paginas", "aparencia-paginas"),
+    )
     parser.add_argument("--dpi", type=int, default=120)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -387,6 +547,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--output é obrigatório para o caso ciclo-paginas")
         screenshot = build_page_cycle_case(destination, dpi=args.dpi)
         print(f"QA ciclo-paginas: 1093x614 a 125% -> {screenshot}")
+        return 0
+    if args.case == "aparencia-paginas":
+        destination = args.output or args.root
+        if destination is None:
+            parser.error("--output é obrigatório para o caso aparencia-paginas")
+        sheets = build_page_appearance_cases(destination, dpi=args.dpi)
+        print(f"Matriz aparencia-paginas: {len(sheets)} folhas -> {destination}")
         return 0
     if args.root is None:
         parser.error("informe o diretório que contém os PDFs E2E")

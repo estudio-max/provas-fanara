@@ -399,7 +399,9 @@ def test_motor_render_cover_retains_ids_metadata_identity_seed_and_warnings(
             round(document.tamanho[0] / 72 * motor.DPI_MOSAICO),
             round(document.tamanho[1] / 72 * motor.DPI_MOSAICO),
         )
-        assert palette == document.p
+        # The cover keeps its independent identity palette; ``document.p`` is
+        # now reserved for the user-selected internal-page appearance.
+        assert palette == document.p_capa
         assert document.pdf.page_count == 1
         assert document.pdf[0].get_text().strip() == ""
     finally:
