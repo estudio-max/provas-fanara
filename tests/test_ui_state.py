@@ -1122,7 +1122,8 @@ def test_page_cycle_shutdown_discards_deferred_identity_without_starting_preview
 
     window = MainWindow()
     window.apply_analysis_result(plan)
-    window.previews = (object(),)
+    previews = (object(),)
+    window.previews = previews
 
     def start(page_number: int) -> None:
         window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
@@ -1130,8 +1131,8 @@ def test_page_cycle_shutdown_discards_deferred_identity_without_starting_preview
     monkeypatch.setattr(window, "_start_page_cycle_worker", start)
     monkeypatch.setattr(
         window,
-        "request_preview",
-        lambda: pytest.fail("O fechamento não deve iniciar uma prévia nova."),
+        "_start_worker",
+        lambda worker, completed: pytest.fail("O fechamento não deve iniciar uma prévia nova."),
     )
     window.request_page_cycle(1)
     window.set_cover_identity({"titulo": "Não iniciar no fechamento"})
@@ -1140,6 +1141,7 @@ def test_page_cycle_shutdown_discards_deferred_identity_without_starting_preview
     window._page_cycle_cancelled()
 
     assert window._deferred_cover_identity is None
+    assert window.previews is previews
 
 
 def test_page_cycle_result_updates_only_its_plan_and_thumbnail(qapp, plan):
@@ -1271,7 +1273,10 @@ def test_close_waits_for_active_page_cycle_thread_to_stop(qapp, tmp_path: Path, 
     from provas.ui import main_window
     from provas.ui.workers import PageCycleWorker
 
+    worker_started = threading.Event()
+
     def cooperative_operation(_config, _plan, _number, _width, *, cancelar):
+        worker_started.set()
         while not cancelar.is_set():
             time.sleep(0.002)
         raise motor.Cancelado()
@@ -1287,10 +1292,14 @@ def test_close_waits_for_active_page_cycle_thread_to_stop(qapp, tmp_path: Path, 
     window.previews = (object(),)
     window.request_page_cycle(1)
     assert window._threads
+    deadline = time.perf_counter() + 2
+    while not worker_started.is_set() and time.perf_counter() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+    assert worker_started.is_set()
 
     window.close()
 
-    deadline = time.perf_counter() + 2
     while window.isVisible() and time.perf_counter() < deadline:
         qapp.processEvents()
         time.sleep(0.005)
@@ -1298,6 +1307,8 @@ def test_close_waits_for_active_page_cycle_thread_to_stop(qapp, tmp_path: Path, 
     assert not window.isVisible()
     assert not window._threads
     assert window._page_cycle_thread is None
+    window.deleteLater()
+    qapp.processEvents()
 
 
 def test_resize_hides_diagnostics_before_sacrificing_preview(qapp):
