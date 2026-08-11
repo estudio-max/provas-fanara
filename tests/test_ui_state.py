@@ -59,8 +59,8 @@ def plan(tmp_path: Path) -> BookPlan:
         mode="prova",
         cover_photo_ids=photos[:2],
         pages=(
-            PagePlan(1, "solo-landscape", (photos[0],), "opening"),
-            PagePlan(2, "triptych-balanced", photos[1:], "ending"),
+            PagePlan(1, "single-landscape", (photos[0],), "opening"),
+            PagePlan(2, "pair-asymmetric-left", photos[1:3], "ending"),
         ),
     )
 
@@ -954,6 +954,308 @@ def test_page_cycle_worker_translates_known_internal_errors_to_portuguese(
     assert failures == [f"Não foi possível atualizar a página: {expected}."]
     assert "Thumbnail width" not in failures[0]
     assert "Unknown template" not in failures[0]
+
+
+def test_page_cycle_queue_serializes_requests_ignores_duplicates_and_locks_global_actions(
+    qapp, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    three_pages = replace(
+        plan,
+        pages=(
+            *plan.pages,
+            PagePlan(3, "single-full", (plan.pages[0].photo_ids[0],), "ending"),
+        ),
+    )
+    window = MainWindow()
+    window.apply_analysis_result(three_pages)
+    window.previews = (object(),)
+    started: list[int] = []
+
+    def start(page_number: int) -> None:
+        started.append(page_number)
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+
+    window.request_page_cycle(1)
+    window.request_page_cycle(1)
+    window.request_page_cycle(2)
+    window.request_page_cycle(3)
+
+    assert started == [1]
+    assert tuple(window._page_cycle_queue) == (2, 3)
+    assert window._page_cycle_busy == {1, 2, 3}
+    assert window.is_busy
+    assert not window.open_project_button.isEnabled()
+    assert not window.save_button.isEnabled()
+    assert not window.sidebar.folder_button.isEnabled()
+    assert not window.sidebar.proof_radio.isEnabled()
+    assert not window.sidebar.book_radio.isEnabled()
+    assert not window.sidebar.cover_style.isEnabled()
+    assert not window.sidebar.title_edit.isEnabled()
+    assert not window.sidebar.logo_choose_button.isEnabled()
+    assert window.preview_grid.zoom_in_button.isEnabled()
+
+
+def test_page_cycle_failure_releases_its_button_and_continues_the_queue(qapp, plan, monkeypatch):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    previews = (object(),)
+    window.previews = previews
+    started: list[int] = []
+
+    def start(page_number: int) -> None:
+        started.append(page_number)
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    window.request_page_cycle(1)
+    window.request_page_cycle(2)
+    window._page_cycle_failed("falha simulada")
+
+    assert started == [1, 2]
+    assert window._page_cycle_busy == {2}
+    assert window.status_kind == "error"
+    assert "falha simulada" in window.status_message
+
+
+def test_page_cycle_cancellation_clears_pending_pages_and_restores_global_actions(qapp, plan):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    previews = (object(),)
+    window.previews = previews
+    window.is_busy = True
+    window._cancel_event = threading.Event()
+    window._page_cycle_worker = type("Worker", (), {"page_number": 1})()  # type: ignore[assignment]
+    window._page_cycle_busy = {1, 2}
+    window._page_cycle_queue.extend((2,))
+
+    window._page_cycle_cancelled()
+
+    assert not window.is_busy
+    assert window._page_cycle_busy == set()
+    assert not window._page_cycle_queue
+    assert window.open_project_button.isEnabled()
+    assert window.status_kind == "idle"
+
+
+def test_page_cycle_defers_a_pending_cover_identity_until_the_queue_finishes(
+    qapp, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    previews = (object(),)
+    window.previews = previews
+    requested_previews: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: requested_previews.append(True))
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    window.request_page_cycle(1)
+    window.set_cover_identity({"titulo": "Depois da fila"})
+
+    assert window.project_state is not None
+    assert window.project_state.config.titulo != "Depois da fila"
+    assert window.previews is previews
+    assert requested_previews == []
+
+    window._page_cycle_cancelled()
+
+    assert window.project_state.config.titulo == "Depois da fila"
+    assert requested_previews == [True]
+
+
+def test_page_cycle_blocks_choose_folder_shortcut_handler(qapp, plan, monkeypatch):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder("pasta-original")
+    window.apply_analysis_result(plan)
+    window.previews = (object(),)
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *_args: pytest.fail("O seletor de pasta não deve abrir durante a fila."),
+    )
+    window.request_page_cycle(1)
+    window.choose_folder()
+
+    assert window.folder_path.endswith("pasta-original")
+
+
+def test_page_cycle_shutdown_discards_deferred_identity_without_starting_preview(
+    qapp, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    window.previews = (object(),)
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    monkeypatch.setattr(
+        window,
+        "request_preview",
+        lambda: pytest.fail("O fechamento não deve iniciar uma prévia nova."),
+    )
+    window.request_page_cycle(1)
+    window.set_cover_identity({"titulo": "Não iniciar no fechamento"})
+    window.request_shutdown()
+
+    window._page_cycle_cancelled()
+
+    assert window._deferred_cover_identity is None
+
+
+def test_page_cycle_result_updates_only_its_plan_and_thumbnail(qapp, plan):
+    from provas.motor import PageCycleResult
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    previews = tuple(Image.new("RGB", (420, 297), "#d6e5f2") for _ in plan.pages)
+    window.previews = previews
+    window.preview_grid.set_previews(plan, previews)
+    card = window.preview_grid.card(1)
+    cycled = replace(
+        plan,
+        pages=(replace(plan.pages[0], template_id="single-full"), plan.pages[1]),
+    )
+    window._page_cycle_worker = type("Worker", (), {"page_number": 1})()  # type: ignore[assignment]
+    window._page_cycle_busy = {1}
+
+    window._page_cycle_completed(
+        PageCycleResult(cycled, 1, Image.new("RGB", (420, 297), "#d84a68"))
+    )
+
+    assert window.project_state is not None
+    assert window.project_state.plan == cycled
+    assert window.project_state.plan.pages[1] == plan.pages[1]
+    assert window.preview_grid.card(1) is card
+    assert window.preview_grid._plan == cycled
+    assert window.preview_grid._images[0].pixelColor(1, 1).name() == "#d84a68"
+
+
+def test_page_cycle_result_can_be_saved_and_reopened(qapp, tmp_path: Path):
+    from provas.ciclo_paginas import ciclar_pagina
+    from provas.compositor import compose
+    from provas.modelos import PhotoInfo
+    from provas.motor import PageCycleResult
+    from provas.projeto import load_project, save_project
+    from provas.ui import MainWindow
+
+    photos = tuple(
+        PhotoInfo(
+            id=str(tmp_path / f"foto-{number}.jpg"), path=str(tmp_path / f"foto-{number}.jpg"),
+            label=f"Foto {number}", width=300, height=450, index=number,
+            sharpness=0.7, exposure=0.7, density=0.6, quality=0.8, similarity_group=number,
+        )
+        for number in range(17)
+    )
+    plan = compose(photos, "fotolivro", 41)
+    ratios = {photo.id: photo.width / photo.height for photo in photos}
+    page_number = next(
+        page.number for page in plan.pages
+        if ciclar_pagina(plan, page.number, ratios) != plan
+    )
+    cycled = ciclar_pagina(plan, page_number, ratios)
+    window = MainWindow()
+    window.apply_analysis_result(plan, photos=photos)
+    previews = tuple(Image.new("RGB", (420, 297), "#d6e5f2") for _ in plan.pages)
+    window.previews = previews
+    window.preview_grid.set_previews(plan, previews)
+    window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+    window._page_cycle_busy = {page_number}
+
+    window._page_cycle_completed(
+        PageCycleResult(cycled, page_number, Image.new("RGB", (420, 297), "#d84a68"))
+    )
+
+    destination = tmp_path / "pagina-ciclada.provas.json"
+    assert window.project_state is not None
+    save_project(destination, window.project_state)
+    assert load_project(destination).plan == cycled
+
+
+def test_page_cycle_click_runs_worker_and_keeps_preview_interactions_available(qapp, plan):
+    from provas.ui import MainWindow
+
+    for index, photo_id in enumerate(
+        photo_id for page in plan.pages for photo_id in page.photo_ids
+    ):
+        Image.new("RGB", (600, 400), (80 + index * 20, 90, 100)).save(photo_id)
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    previews = tuple(Image.new("RGB", (420, 297), "#d6e5f2") for _ in plan.pages)
+    window.previews = previews
+    window.preview_grid.set_previews(plan, previews)
+    original = window.project_state.plan
+
+    window.preview_grid.page_layout_requested.emit(1)
+    deadline = time.monotonic() + 10
+    while window.is_busy and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert not window.is_busy
+    assert window.project_state is not None
+    assert window.project_state.plan.pages[0] != original.pages[0]
+    assert window.preview_grid.zoom_in_button.isEnabled()
+    window.close()
+
+
+def test_close_waits_for_active_page_cycle_thread_to_stop(qapp, tmp_path: Path, plan, monkeypatch):
+    from provas import motor
+    from provas.ui import MainWindow
+    from provas.ui import main_window
+    from provas.ui.workers import PageCycleWorker
+
+    def cooperative_operation(_config, _plan, _number, _width, *, cancelar):
+        while not cancelar.is_set():
+            time.sleep(0.002)
+        raise motor.Cancelado()
+
+    class SlowPageCycleWorker(PageCycleWorker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, operation=cooperative_operation, **kwargs)
+
+    monkeypatch.setattr(main_window, "PageCycleWorker", SlowPageCycleWorker)
+    window = MainWindow()
+    window.show()
+    window.apply_analysis_result(plan)
+    window.previews = (object(),)
+    window.request_page_cycle(1)
+    for _ in range(3):
+        qapp.processEvents()
+
+    window.close()
+
+    deadline = time.perf_counter() + 2
+    while window.isVisible() and time.perf_counter() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+
+    assert not window.isVisible()
+    assert not window._threads
+    assert window._page_cycle_thread is None
 
 
 def test_resize_hides_diagnostics_before_sacrificing_preview(qapp):

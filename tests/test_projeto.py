@@ -57,6 +57,24 @@ def test_save_and_load_round_trip_unicode_windows_metadata_without_image_bytes(t
     assert load_project(destination) == state
 
 
+def test_save_and_reopen_preserves_an_exact_per_page_layout_choice(tmp_path: Path):
+    from provas.ciclo_paginas import ciclar_pagina
+    from provas.projeto import load_project, save_project
+
+    state, photos = _state(tmp_path, total=17)
+    ratios = {photo.id: photo.width / photo.height for photo in photos}
+    page_number = next(
+        page.number for page in state.plan.pages
+        if ciclar_pagina(state.plan, page.number, ratios) != state.plan
+    )
+    cycled = replace(state.plan, pages=ciclar_pagina(state.plan, page_number, ratios).pages)
+    destination = tmp_path / "ciclado.provas.json"
+
+    save_project(destination, replace(state, plan=cycled))
+
+    assert load_project(destination).plan == cycled
+
+
 def test_load_migrates_v1_project_to_default_cover_style_without_losing_identity(tmp_path: Path):
     from provas import projeto
 
@@ -173,11 +191,9 @@ def test_project_state_snapshots_config_so_external_or_direct_mutation_cannot_di
 def test_load_reports_missing_source_paths_exactly_without_failing(tmp_path: Path):
     from provas.projeto import load_project, save_project
 
-    existing = tmp_path / "a.jpg"
-    existing.write_bytes(b"metadata only")
-    missing = tmp_path / "movida.jpg"
     state, _ = _state(tmp_path, total=2)
-    state = replace(state, photo_paths=(str(existing), str(missing)))
+    missing = Path(state.photo_paths[1])
+    missing.unlink()
     destination = tmp_path / "project.json"
     save_project(destination, state)
 
@@ -194,6 +210,59 @@ def test_load_rejects_a_future_schema_in_portuguese(tmp_path: Path):
 
     with pytest.raises(ProjectSchemaError, match="versão.*não é suportada"):
         load_project(destination)
+
+
+def test_load_rejects_page_photo_that_is_not_part_of_the_project(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["plan"]["pages"][0]["photo_ids"] = [str(tmp_path / "intrusa.jpg")]
+    source = tmp_path / "foto-intrusa.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(projeto.ProjectSchemaError, match="não pertence ao projeto"):
+        projeto.load_project(source)
+
+
+def test_load_rejects_all_page_photos_when_none_belong_to_the_project(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["photo_paths"] = [str(tmp_path / "outra-foto.jpg")]
+    source = tmp_path / "todas-fotos-intrusas.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(projeto.ProjectSchemaError, match="não pertence ao projeto"):
+        projeto.load_project(source)
+
+
+def test_load_rejects_page_template_with_incompatible_photo_count(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["plan"]["pages"][0]["template_id"] = "pair-asymmetric-left"
+    source = tmp_path / "aridade-invalida.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(projeto.ProjectSchemaError, match="quantidade de fotos incompatível"):
+        projeto.load_project(source)
+
+
+def test_load_rejects_unknown_templates_when_no_page_uses_the_catalog(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    for page in payload["plan"]["pages"]:
+        page["template_id"] = "template-desconhecido"
+    source = tmp_path / "templates-inexistentes.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(projeto.ProjectSchemaError, match="template.*não existe"):
+        projeto.load_project(source)
 
 
 def test_save_is_atomic_and_cleans_its_unique_sibling_temp_on_replace_failure(tmp_path: Path, monkeypatch):

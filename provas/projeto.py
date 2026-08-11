@@ -17,6 +17,7 @@ from .compositor import compose
 from .capas import validate_cover_style
 from .modelos import BookPlan, PagePlan, PhotoInfo
 from .motor import Config
+from .templates import catalog
 
 
 PROJECT_SCHEMA_VERSION = 3
@@ -166,6 +167,27 @@ def _plan_from_data(data: object) -> BookPlan:
         raise ProjectSchemaError("Projeto inválido: plano malformado.") from exc
 
 
+def _validate_persisted_plan(plan: BookPlan, photo_paths: tuple[str, ...]) -> None:
+    """Reject page references that cannot be rendered from this project file."""
+    project_photos = set(photo_paths)
+    templates = {template.id: template for template in catalog()}
+    for page in plan.pages:
+        missing = next((photo_id for photo_id in page.photo_ids if photo_id not in project_photos), None)
+        if missing is not None:
+            raise ProjectSchemaError(
+                f"Projeto inválido: a foto da página {page.number} não pertence ao projeto."
+            )
+        template = templates.get(page.template_id)
+        if template is None:
+            raise ProjectSchemaError(
+                f"Projeto inválido: o template da página {page.number} não existe."
+            )
+        if template is not None and len(template.slots) != len(page.photo_ids):
+            raise ProjectSchemaError(
+                f"Projeto inválido: a página {page.number} tem quantidade de fotos incompatível com o template."
+            )
+
+
 def _state_to_data(state: ProjectState) -> dict[str, object]:
     return {
         "schema_version": PROJECT_SCHEMA_VERSION,
@@ -217,10 +239,12 @@ def _state_from_data(data: object) -> ProjectState:
         photo_paths = tuple(str(path) for path in data.get("photo_paths", ()))
         cache_keys = tuple(str(key) for key in data.get("cache_keys", ()))
         previous_data = data.get("previous_plan")
-        return ProjectState(
-            ProjectConfig.from_data(config_data), _plan_from_data(data["plan"]), photo_paths, cache_keys,
-            _plan_from_data(previous_data) if previous_data is not None else None,
-        )
+        plan = _plan_from_data(data["plan"])
+        previous_plan = _plan_from_data(previous_data) if previous_data is not None else None
+        _validate_persisted_plan(plan, photo_paths)
+        if previous_plan is not None:
+            _validate_persisted_plan(previous_plan, photo_paths)
+        return ProjectState(ProjectConfig.from_data(config_data), plan, photo_paths, cache_keys, previous_plan)
     except (KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, ProjectSchemaError):
             raise

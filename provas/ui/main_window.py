@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -24,8 +25,9 @@ from PySide6.QtWidgets import (
 
 from ..capas import validate_cover_style
 from ..capa_classica import ClassicCrop
+from ..ciclo_paginas import tem_alternativa
 from ..modelos import BookPlan, PhotoInfo
-from ..motor import Config, PlanAnalysisResult, Resultado
+from ..motor import Config, PageCycleResult, PlanAnalysisResult, Resultado
 from ..projeto import ProjectSchemaError, ProjectState, load_project, save_project, undo_regeneration
 from .. import recursos
 from .cover_dialog import CoverDialog
@@ -33,7 +35,7 @@ from .crop_dialog import CropDialog
 from .diagnostics import DiagnosticsPanel
 from .preview_grid import PreviewGrid
 from .sidebar import WorkflowSidebar
-from .workers import AnalysisWorker, EditorialWorker, ExportWorker, PreviewWorker
+from .workers import AnalysisWorker, EditorialWorker, ExportWorker, PageCycleWorker, PreviewWorker
 
 
 class MainWindow(QMainWindow):
@@ -67,6 +69,12 @@ class MainWindow(QMainWindow):
         self._crop_dialog: CropDialog | None = None
         self._classic_preview_photo_id = ""
         self._classic_preview_target: tuple[int, int] | None = None
+        self._page_cycle_queue: deque[int] = deque()
+        self._page_cycle_worker: PageCycleWorker | None = None
+        self._page_cycle_thread: QThread | None = None
+        self._page_cycle_busy: set[int] = set()
+        self._page_cycle_aspect_ratios: dict[str, float] = {}
+        self._deferred_cover_identity: dict[str, str] | None = None
 
         self._build()
         self._connect()
@@ -166,6 +174,7 @@ class MainWindow(QMainWindow):
         self.sidebar.cancel_requested.connect(self.cancel_active_operation)
         self.preview_grid.regenerate_requested.connect(self.request_regeneration)
         self.preview_grid.undo_requested.connect(self.undo_regeneration)
+        self.preview_grid.page_layout_requested.connect(self.request_page_cycle)
         self.open_project_button.clicked.connect(self.open_project_dialog)
         self.save_button.clicked.connect(self.save_project_dialog)
         self.export_button.clicked.connect(self.export_dialog)
@@ -178,6 +187,8 @@ class MainWindow(QMainWindow):
             file.close()
 
     def choose_folder(self) -> None:
+        if self.is_busy:
+            return
         path = QFileDialog.getExistingDirectory(self, "Escolher pasta de fotografias")
         if path:
             self.select_folder(path)
@@ -209,6 +220,7 @@ class MainWindow(QMainWindow):
         self._draft_config = state.config.to_motor_config()
         self.folder_path = os.path.abspath(state.config.pasta)
         self.previews = ()
+        self._page_cycle_aspect_ratios = {}
         self.last_export_path = ""
         missing = state.missing_paths
         self._analysis_failures = tuple(
@@ -256,6 +268,7 @@ class MainWindow(QMainWindow):
         self.sidebar.set_cover_identity(self._draft_config)
         self.project_state = None
         self.previews = ()
+        self._page_cycle_aspect_ratios = {}
         self._analysis_failures = ()
         self.last_export_path = ""
         self.project_label.setText(title)
@@ -331,6 +344,9 @@ class MainWindow(QMainWindow):
             key: str(identity.get(key, "")).strip()
             for key in ("titulo", "estudio", "site", "logo")
         }
+        if self._page_cycle_worker is not None or self._page_cycle_queue:
+            self._deferred_cover_identity = values
+            return
         if self._draft_config is not None:
             self._draft_config = replace(self._draft_config, **values)
         if self.project_state is None:
@@ -384,6 +400,12 @@ class MainWindow(QMainWindow):
     def cancel_active_operation(self) -> None:
         if self._cancel_event is None:
             return
+        if self._page_cycle_worker is not None or self._page_cycle_queue:
+            queued = tuple(self._page_cycle_queue)
+            self._page_cycle_queue.clear()
+            for page_number in queued:
+                self._page_cycle_busy.discard(page_number)
+                self.preview_grid.set_page_busy(page_number, False)
         workers = tuple(self._workers)
         for worker in workers:
             worker.cancel()
@@ -444,6 +466,11 @@ class MainWindow(QMainWindow):
             else tuple(dict.fromkeys(photo_id for page in plan.pages for photo_id in page.photo_ids))
         )
         self.project_state = ProjectState(config, plan, paths)
+        self._page_cycle_aspect_ratios = {
+            photo.id: photo.width / photo.height
+            for photo in photos
+            if photo.width > 0 and photo.height > 0
+        }
         self.sidebar.set_cover_style(config.estilo_capa, emit=False)
         self.sidebar.set_cover_identity(config)
         self._analysis_failures = tuple(failures)
@@ -496,6 +523,7 @@ class MainWindow(QMainWindow):
                 self._classic_preview_photo_id = classic_photo_id
                 self._classic_preview_target = classic_target
         self.preview_grid.set_previews(self.project_state.plan, items)
+        self._update_page_cycle_availability()
         self._end_operation()
         if warnings:
             self.set_status(str(warnings[0].message), "warning")
@@ -513,6 +541,190 @@ class MainWindow(QMainWindow):
         event = threading.Event()
         self.begin_operation("Gerando outra diagramação…", event)
         self._start_worker(AnalysisWorker(config, event), self._regeneration_completed)
+
+    def request_page_cycle(self, page_number: int) -> None:
+        """Queue one local layout change without disturbing the visible preview grid."""
+        if (
+            self.project_state is None
+            or not self.previews
+            or self._closing
+            or (self.is_busy and self._page_cycle_worker is None)
+            or page_number in self._page_cycle_busy
+            or not any(page.number == page_number and page.role != "cover" for page in self.project_state.plan.pages)
+        ):
+            return
+        self._page_cycle_busy.add(page_number)
+        self.preview_grid.set_page_busy(page_number, True)
+        self._page_cycle_queue.append(page_number)
+        if not self.is_busy:
+            self.is_busy = True
+            self._cancel_event = threading.Event()
+            self.sidebar.set_busy(True, "Atualizando diagramações…")
+            self.set_status("Atualizando diagramações selecionadas…", "loading")
+            self._sync_actions()
+        self._start_next_page_cycle()
+
+    def _start_next_page_cycle(self) -> None:
+        if self._page_cycle_worker is not None or not self._page_cycle_queue or self._closing:
+            return
+        self._start_page_cycle_worker(self._page_cycle_queue.popleft())
+
+    def _start_page_cycle_worker(self, page_number: int) -> None:
+        if self.project_state is None or self._cancel_event is None:
+            self._page_cycle_busy.discard(page_number)
+            self.preview_grid.set_page_busy(page_number, False)
+            self._finish_page_cycle_queue()
+            return
+        worker = PageCycleWorker(
+            self.project_state.config.to_motor_config(),
+            self.project_state.plan,
+            page_number,
+            self._preview_width(),
+            self._cancel_event,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        self._page_cycle_worker = worker
+        self._page_cycle_thread = thread
+        self._threads.add(thread)
+        self._workers.add(worker)
+        thread.started.connect(worker.run)
+        worker.completed.connect(self._page_cycle_completed)
+        worker.failed.connect(self._page_cycle_failed)
+        worker.cancelled.connect(self._page_cycle_cancelled)
+        worker.completed.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        worker.completed.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        worker.cancelled.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._forget_page_cycle_thread(thread, worker))
+        thread.start()
+
+    def _active_page_cycle_number(self) -> int | None:
+        worker = self._page_cycle_worker
+        page_number = getattr(worker, "page_number", None)
+        return page_number if isinstance(page_number, int) else None
+
+    def _release_page_cycle_page(self, page_number: int | None) -> None:
+        if page_number is not None:
+            self._page_cycle_busy.discard(page_number)
+            self.preview_grid.set_page_busy(page_number, False)
+        self._page_cycle_worker = None
+
+    def _page_cycle_completed(self, result: object) -> None:
+        page_number = self._active_page_cycle_number()
+        self._release_page_cycle_page(page_number)
+        if not isinstance(result, PageCycleResult) or self.project_state is None:
+            self._page_cycle_failed("o motor não retornou a página atualizada")
+            return
+        try:
+            self.project_state = replace(self.project_state, plan=result.plan)
+            self._replace_preview_page_plan(result.plan, result.page_number)
+            self.preview_grid.replace_page_preview(result.page_number, result.thumbnail)
+            self._update_page_cycle_availability({result.page_number})
+            self.diagnostics.set_plan(result.plan, failures=self._analysis_failures)
+            self.set_status(f"Página {result.page_number} atualizada.", "success")
+        except Exception as exc:
+            self._page_cycle_failed(str(exc))
+            return
+        finally:
+            close = getattr(result.thumbnail, "close", None)
+            if callable(close):
+                close()
+        self._start_next_page_cycle()
+        self._finish_page_cycle_queue()
+
+    def _replace_preview_page_plan(self, plan: BookPlan, page_number: int) -> None:
+        """Keep the grid's cache key in sync while retaining its cards and scroll position."""
+        replacement = next(page for page in plan.pages if page.number == page_number)
+        self.preview_grid._plan = plan
+        self.preview_grid._entries = tuple(
+            replacement if page.number == page_number else page
+            for page in self.preview_grid._entries
+        )
+
+    def _page_cycle_failed(self, message: str) -> None:
+        page_number = self._active_page_cycle_number()
+        self._release_page_cycle_page(page_number)
+        detail = message.strip().rstrip(".") or "ocorreu um erro inesperado"
+        self.set_status(
+            f"Não foi possível atualizar a página: {detail}. A fila continuará.", "error",
+        )
+        self._start_next_page_cycle()
+        self._finish_page_cycle_queue()
+
+    def _page_cycle_cancelled(self) -> None:
+        page_number = self._active_page_cycle_number()
+        self._release_page_cycle_page(page_number)
+        queued = tuple(self._page_cycle_queue)
+        self._page_cycle_queue.clear()
+        for number in queued:
+            self._page_cycle_busy.discard(number)
+            self.preview_grid.set_page_busy(number, False)
+        self._finish_page_cycle_queue()
+        self.set_status("Atualização de páginas cancelada. Você pode tentar novamente.", "idle")
+
+    def _finish_page_cycle_queue(self) -> None:
+        if self._page_cycle_worker is not None or self._page_cycle_queue:
+            return
+        self.is_busy = False
+        self._cancel_event = None
+        self.sidebar.set_busy(False)
+        self._sync_actions()
+        identity, self._deferred_cover_identity = self._deferred_cover_identity, None
+        if identity is not None and not self._closing:
+            self.set_cover_identity(identity)
+
+    def _forget_page_cycle_thread(self, thread: QThread, worker: PageCycleWorker) -> None:
+        if self._page_cycle_thread is thread:
+            self._page_cycle_thread = None
+        self._forget_thread(thread, worker)
+
+    def _page_cycle_ratios_for(self, plan: BookPlan, page_numbers: set[int] | None = None) -> dict[str, float]:
+        wanted = {
+            photo_id
+            for page in plan.pages
+            if page_numbers is None or page.number in page_numbers
+            for photo_id in page.photo_ids
+        }
+        for photo_id in wanted - self._page_cycle_aspect_ratios.keys():
+            try:
+                with Image.open(photo_id) as image:
+                    if image.width > 0 and image.height > 0:
+                        self._page_cycle_aspect_ratios[photo_id] = image.width / image.height
+            except (OSError, UnidentifiedImageError):
+                continue
+        return {
+            photo_id: self._page_cycle_aspect_ratios[photo_id]
+            for photo_id in wanted
+            if photo_id in self._page_cycle_aspect_ratios
+        }
+
+    def _update_page_cycle_availability(self, page_numbers: set[int] | None = None) -> None:
+        if self.project_state is None:
+            self.preview_grid.set_page_alternatives(())
+            return
+        plan = self.project_state.plan
+        candidates = (
+            tuple(page.number for page in plan.pages if page.role != "cover")
+            if page_numbers is None
+            else tuple(page_numbers)
+        )
+        available = set(getattr(self.preview_grid, "_alternative_page_numbers", set()))
+        if page_numbers is None:
+            available.clear()
+        for page_number in candidates:
+            try:
+                ratios = self._page_cycle_ratios_for(plan, {page_number})
+                if tem_alternativa(plan, page_number, ratios):
+                    available.add(page_number)
+                else:
+                    available.discard(page_number)
+            except ValueError:
+                available.discard(page_number)
+        self.preview_grid.set_page_alternatives(available)
 
     def _regeneration_completed(self, result: object) -> None:
         if isinstance(result, PlanAnalysisResult):
@@ -908,6 +1120,11 @@ class MainWindow(QMainWindow):
     def request_shutdown(self) -> None:
         """Request cooperative cancellation while leaving Qt's event loop responsive."""
         self._closing = True
+        queued = tuple(self._page_cycle_queue)
+        self._page_cycle_queue.clear()
+        for page_number in queued:
+            self._page_cycle_busy.discard(page_number)
+            self.preview_grid.set_page_busy(page_number, False)
         workers = tuple(self._workers)
         for worker in workers:
             worker.cancel()
