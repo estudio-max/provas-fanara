@@ -1238,6 +1238,62 @@ def test_page_cycle_defers_page_appearance_until_the_queue_finishes(
     assert requested_previews == [True]
 
 
+def test_page_cycle_appearance_reversal_clears_pending_change_without_preview(
+    qapp, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    window.previews = (object(),)
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    window.request_page_cycle(1)
+    window.set_page_appearance("cinza", True)
+    window.set_page_appearance("branco", False)
+
+    assert window._deferred_page_appearance is None
+
+    window._page_cycle_cancelled()
+
+    assert window.project_state is not None
+    assert window.project_state.config.fundo_paginas == "branco"
+    assert window.project_state.config.sombra_fotos is False
+    assert preview_requests == []
+
+
+def test_page_cycle_page_appearance_uses_the_latest_pending_value(qapp, plan, monkeypatch):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    window.previews = (object(),)
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    window.request_page_cycle(1)
+    window.set_page_appearance("cinza", True)
+    window.set_page_appearance("preto", True)
+
+    assert window._deferred_page_appearance == ("preto", True)
+
+    window._page_cycle_cancelled()
+
+    assert window.project_state is not None
+    assert window.project_state.config.fundo_paginas == "preto"
+    assert window.project_state.config.sombra_fotos is True
+    assert preview_requests == [True]
+
+
 def test_deferred_cover_identity_and_page_appearance_preserve_preview_scroll(
     qapp, plan, monkeypatch,
 ):

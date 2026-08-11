@@ -359,13 +359,20 @@ class MainWindow(QMainWindow):
         if self.project_state is None:
             return
         current = self.project_state.config
+        if self._page_cycle_worker is not None or self._page_cycle_queue:
+            self._deferred_page_appearance = (
+                None
+                if (
+                    current.fundo_paginas == normalized_background
+                    and current.sombra_fotos == normalized_shadow
+                )
+                else (normalized_background, normalized_shadow)
+            )
+            return
         if (
             current.fundo_paginas == normalized_background
             and current.sombra_fotos == normalized_shadow
         ):
-            return
-        if self._page_cycle_worker is not None or self._page_cycle_queue:
-            self._deferred_page_appearance = (normalized_background, normalized_shadow)
             return
         if self.is_busy:
             return
