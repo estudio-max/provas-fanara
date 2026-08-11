@@ -601,6 +601,43 @@ def test_preview_pixels_match_export_with_custom_render_style(tmp_path: Path, im
     assert thumbnail.tobytes() == pixmap.samples
 
 
+def _wcag_contrast(first: tuple[float, float, float], second: tuple[float, float, float]) -> float:
+    def luminance(color: tuple[float, float, float]) -> float:
+        channels = tuple(
+            channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in color
+        )
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@pytest.mark.parametrize(
+    ("name", "hex_color"),
+    (("branco", "#FFFFFF"), ("cinza", "#D2D2D2"), ("preto", "#111215")),
+)
+def test_page_background_presets_resolve_wcag_contrast_palettes(name: str, hex_color: str):
+    from provas import tema
+
+    assert tema.PAGE_BACKGROUNDS[name] == hex_color
+    palette = tema.paleta_paginas(name)
+
+    assert tema.escrever_hex(palette.fundo) == hex_color
+    assert _wcag_contrast(palette.texto, palette.fundo) >= 4.5
+    assert _wcag_contrast(palette.apagado, palette.fundo) >= 4.5
+    assert _wcag_contrast(palette.acento, palette.fundo) >= 4.5
+    assert _wcag_contrast(palette.filete, palette.fundo) >= 3.0
+    assert _wcag_contrast(palette.moldura, palette.fundo) >= 3.0
+
+
+def test_page_background_palette_rejects_unknown_value_in_portuguese():
+    from provas import tema
+
+    with pytest.raises(ValueError, match="Fundo das páginas inválido"):
+        tema.paleta_paginas("azul")
+
+
 def test_cancellation_after_atomic_replace_returns_success(tmp_path: Path, image_factory, monkeypatch):
     from provas import motor
 

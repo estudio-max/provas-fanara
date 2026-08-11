@@ -17,10 +17,11 @@ from .compositor import compose
 from .capas import validate_cover_style
 from .modelos import BookPlan, PagePlan, PhotoInfo
 from .motor import Config
+from . import tema
 from .templates import catalog
 
 
-PROJECT_SCHEMA_VERSION = 3
+PROJECT_SCHEMA_VERSION = 4
 LONG_ALBUM_PAGE_LIMIT = 20
 LOW_QUALITY_THRESHOLD = 0.35
 
@@ -49,6 +50,8 @@ class ProjectConfig:
     estudio: str = ""
     site: str = ""
     cor_fundo: str = "#F6F0E8"
+    fundo_paginas: str = "branco"
+    sombra_fotos: bool = False
     recursivo: bool = False
     capa_mosaico: bool = True
     estilo_capa: str = "classica"
@@ -65,6 +68,8 @@ class ProjectConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cover_ids", tuple(self.cover_ids))
+        tema.paleta_paginas(self.fundo_paginas)
+        object.__setattr__(self, "sombra_fotos", bool(self.sombra_fotos))
         object.__setattr__(self, "estilo_capa", validate_cover_style(self.estilo_capa))
         object.__setattr__(self, "capa_foco_x", min(1.0, max(0.0, float(self.capa_foco_x))))
         object.__setattr__(self, "capa_foco_y", min(1.0, max(0.0, float(self.capa_foco_y))))
@@ -214,7 +219,7 @@ def _migrate_project(data: object) -> dict[str, object]:
     version = data.get("schema_version")
     if version == PROJECT_SCHEMA_VERSION:
         return dict(data)
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise ProjectSchemaError(f"A versão do projeto {version!r} não é suportada.")
 
     migrated = dict(data)
@@ -233,6 +238,10 @@ def _migrate_project(data: object) -> dict[str, object]:
         migrated_config.setdefault("capa_zoom", 1.0)
         migrated_config.setdefault("capa_enquadramento", "automatico")
         version = 3
+    if version == 3:
+        migrated_config.setdefault("fundo_paginas", "branco")
+        migrated_config.setdefault("sombra_fotos", False)
+        version = 4
     migrated["config"] = migrated_config
     migrated["schema_version"] = version
     return migrated

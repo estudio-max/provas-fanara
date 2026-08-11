@@ -64,6 +64,8 @@ class Config:
     estudio: str = ""                # usado no cabeçalho quando não há logotipo
     site: str = ""                   # aparece no rodapé das páginas e no pé da capa
     cor_fundo: str = tema.FUNDO_PADRAO
+    fundo_paginas: str = "branco"
+    sombra_fotos: bool = False
     recursivo: bool = False
     capa_mosaico: bool = True
     estilo_capa: str = "classica"
@@ -80,6 +82,8 @@ class Config:
 
     def __post_init__(self) -> None:
         self.cover_ids = tuple(self.cover_ids)
+        tema.paleta_paginas(self.fundo_paginas)
+        self.sombra_fotos = bool(self.sombra_fotos)
 
     def com_padroes(self) -> "Config":
         """Preenche título, subtítulo e caminho de saída a partir da pasta."""
@@ -514,6 +518,8 @@ def _render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[obj
         config.estudio,
         config.site,
         config.cor_fundo,
+        config.fundo_paginas,
+        config.sombra_fotos,
         config.qualidade,
         config.marca_dagua,
         config.marca_opacidade,

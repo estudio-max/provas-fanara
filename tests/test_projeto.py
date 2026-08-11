@@ -50,7 +50,7 @@ def test_save_and_load_round_trip_unicode_windows_metadata_without_image_bytes(t
     raw = destination.read_text(encoding="utf-8")
     payload = json.loads(raw)
 
-    assert payload["schema_version"] == PROJECT_SCHEMA_VERSION == 3
+    assert payload["schema_version"] == PROJECT_SCHEMA_VERSION == 4
     assert "Júlia" in raw
     assert "\\u00fa" not in raw
     assert "image_bytes" not in raw
@@ -82,6 +82,8 @@ def test_load_migrates_v1_project_to_default_cover_style_without_losing_identity
     legacy = projeto._state_to_data(state)
     legacy["schema_version"] = 1
     legacy["config"].pop("estilo_capa")
+    legacy["config"].pop("fundo_paginas")
+    legacy["config"].pop("sombra_fotos")
     legacy["config"].update({
         "estudio": "Estúdio Fanara",
         "site": "fanara.example",
@@ -98,7 +100,66 @@ def test_load_migrates_v1_project_to_default_cover_style_without_losing_identity
     assert migrated.config.estudio == "Estúdio Fanara"
     assert migrated.config.site == "fanara.example"
     assert migrated.config.logo == "C:\\identidade\\marca.png"
-    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == 3
+    assert migrated.config.fundo_paginas == "branco"
+    assert migrated.config.sombra_fotos is False
+    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == 4
+
+
+def test_page_appearance_defaults_and_v3_migration_preserve_plan_cover_and_cycle(tmp_path: Path):
+    from provas import projeto
+
+    state, photos = _state(tmp_path, total=17)
+    from provas.ciclo_paginas import ciclar_pagina
+
+    ratios = {photo.id: photo.width / photo.height for photo in photos}
+    page_number = next(
+        page.number for page in state.plan.pages
+        if ciclar_pagina(state.plan, page.number, ratios) != state.plan
+    )
+    cycled_plan = ciclar_pagina(state.plan, page_number, ratios)
+    payload = projeto._state_to_data(replace(state, plan=cycled_plan))
+    payload["schema_version"] = 3
+    payload["config"].pop("fundo_paginas", None)
+    payload["config"].pop("sombra_fotos", None)
+    source = tmp_path / "v3-sem-aparencia.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated = projeto.load_project(source)
+
+    assert migrated.config.fundo_paginas == "branco"
+    assert migrated.config.sombra_fotos is False
+    assert migrated.plan == cycled_plan
+    assert migrated.plan.cover_photo_ids == state.plan.cover_photo_ids
+
+
+@pytest.mark.parametrize("value", ["", "azul", "#fff"])
+def test_page_background_rejects_unknown_values(value: str):
+    with pytest.raises(ValueError, match="Fundo das páginas inválido"):
+        Config(".", fundo_paginas=value)
+
+
+def test_page_appearance_round_trip_preserves_values_plan_cover_and_cycle(tmp_path: Path):
+    from provas.projeto import load_project, save_project
+
+    state, photos = _state(tmp_path, total=17)
+    from provas.ciclo_paginas import ciclar_pagina
+
+    ratios = {photo.id: photo.width / photo.height for photo in photos}
+    page_number = next(
+        page.number for page in state.plan.pages
+        if ciclar_pagina(state.plan, page.number, ratios) != state.plan
+    )
+    cycled_plan = ciclar_pagina(state.plan, page_number, ratios)
+    configured = replace(state.config, fundo_paginas="preto", sombra_fotos=True)
+    destination = tmp_path / "aparencia.provas.json"
+
+    save_project(destination, replace(state, config=configured, plan=cycled_plan))
+    reopened = load_project(destination)
+
+    assert reopened.config.fundo_paginas == "preto"
+    assert reopened.config.sombra_fotos is True
+    assert reopened.plan == cycled_plan
+    assert reopened.plan.cover_photo_ids == state.plan.cover_photo_ids
 
 
 def test_new_projects_default_to_classic_cover(tmp_path: Path):
@@ -119,6 +180,8 @@ def test_v2_project_keeps_mosaic_when_classic_fields_are_absent(tmp_path: Path):
     payload = projeto._state_to_data(state)
     payload["schema_version"] = 2
     payload["config"]["estilo_capa"] = "mosaico"
+    payload["config"].pop("fundo_paginas")
+    payload["config"].pop("sombra_fotos")
     for field in (
         "foto_capa_id", "capa_foco_x", "capa_foco_y", "capa_zoom", "capa_enquadramento",
     ):
@@ -131,6 +194,8 @@ def test_v2_project_keeps_mosaic_when_classic_fields_are_absent(tmp_path: Path):
     assert migrated.config.estilo_capa == "mosaico"
     assert migrated.config.foto_capa_id == ""
     assert migrated.config.cover_ids == state.config.cover_ids
+    assert migrated.config.fundo_paginas == "branco"
+    assert migrated.config.sombra_fotos is False
     assert migrated.plan == state.plan
     assert migrated.previous_plan == state.previous_plan
 
@@ -142,12 +207,16 @@ def test_v2_project_without_cover_style_migrates_to_mosaic(tmp_path: Path):
     payload = projeto._state_to_data(state)
     payload["schema_version"] = 2
     payload["config"].pop("estilo_capa")
+    payload["config"].pop("fundo_paginas")
+    payload["config"].pop("sombra_fotos")
     source = tmp_path / "v2-sem-estilo.json"
     source.write_text(json.dumps(payload), encoding="utf-8")
 
     migrated = projeto.load_project(source)
 
     assert migrated.config.estilo_capa == "mosaico"
+    assert migrated.config.fundo_paginas == "branco"
+    assert migrated.config.sombra_fotos is False
 
 
 def test_crop_values_are_normalized():
@@ -206,7 +275,7 @@ def test_load_rejects_a_future_schema_in_portuguese(tmp_path: Path):
     from provas.projeto import ProjectSchemaError, load_project
 
     destination = tmp_path / "future.json"
-    destination.write_text(json.dumps({"schema_version": 4}), encoding="utf-8")
+    destination.write_text(json.dumps({"schema_version": 5}), encoding="utf-8")
 
     with pytest.raises(ProjectSchemaError, match="versão.*não é suportada"):
         load_project(destination)

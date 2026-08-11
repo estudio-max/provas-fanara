@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from types import MappingProxyType
 
 Cor = tuple[float, float, float]
 
 FUNDO_PADRAO = "#16161A"          # grafite
 ACENTO_PADRAO = (0.847, 0.251, 0.376)   # #D84060, o rosa da marca
+PAGE_BACKGROUNDS = MappingProxyType({
+    "branco": "#FFFFFF",
+    "cinza": "#D2D2D2",
+    "preto": "#111215",
+})
 
 
 def ler_hex(texto: str) -> Cor:
@@ -34,6 +40,49 @@ def _luminancia(cor: Cor) -> float:
 
 def _misturar(a: Cor, b: Cor, quanto: float) -> Cor:
     return tuple(x + (y - x) * quanto for x, y in zip(a, b))   # type: ignore[return-value]
+
+
+def _luminancia_wcag(cor: Cor) -> float:
+    """Return relative luminance using WCAG's sRGB transfer curve."""
+    canais = tuple(
+        canal / 12.92 if canal <= 0.04045 else ((canal + 0.055) / 1.055) ** 2.4
+        for canal in cor
+    )
+    return 0.2126 * canais[0] + 0.7152 * canais[1] + 0.0722 * canais[2]
+
+
+def _contraste_wcag(a: Cor, b: Cor) -> float:
+    clara, escura = sorted((_luminancia_wcag(a), _luminancia_wcag(b)), reverse=True)
+    return (clara + 0.05) / (escura + 0.05)
+
+
+def _tom_com_contraste(fundo: Cor, texto: Cor, minimo: float) -> Cor:
+    """Mix toward ``texto`` until the WCAG contrast threshold is satisfied."""
+    if _contraste_wcag(texto, fundo) < minimo:
+        raise ValueError("A paleta não possui contraste suficiente.")
+    baixo, alto = 0.0, 1.0
+    for _ in range(32):
+        meio = (baixo + alto) / 2
+        if _contraste_wcag(_misturar(fundo, texto, meio), fundo) >= minimo:
+            alto = meio
+        else:
+            baixo = meio
+    return _misturar(fundo, texto, alto)
+
+
+def _acento_com_contraste(fundo: Cor, acento: Cor, texto: Cor, minimo: float) -> Cor:
+    """Keep the accent hue where possible, adapting it only for readable text."""
+    if _contraste_wcag(acento, fundo) >= minimo:
+        return acento
+    baixo, alto = 0.0, 1.0
+    for _ in range(32):
+        meio = (baixo + alto) / 2
+        candidato = _misturar(acento, texto, meio)
+        if _contraste_wcag(candidato, fundo) >= minimo:
+            alto = meio
+        else:
+            baixo = meio
+    return _misturar(acento, texto, alto)
 
 
 @dataclass(frozen=True)
@@ -73,6 +122,28 @@ def paleta(fundo_hex: str = FUNDO_PADRAO, acento: Cor = ACENTO_PADRAO) -> Paleta
         filete=_misturar(fundo, texto, 0.11),
         moldura=_misturar(fundo, texto, 0.16),
         acento=acento,
+    )
+
+
+def paleta_paginas(nome: str) -> Paleta:
+    """Resolve one of the supported internal-page backgrounds.
+
+    The cover continues to own its independent ``cor_fundo`` palette.  Page
+    presets strengthen secondary text and visual boundaries to their WCAG
+    thresholds without changing the existing cover palette behaviour.
+    """
+    try:
+        base = paleta(PAGE_BACKGROUNDS[nome])
+    except (KeyError, TypeError) as exc:
+        raise ValueError("Fundo das páginas inválido.") from exc
+    return Paleta(
+        fundo=base.fundo,
+        painel=base.painel,
+        texto=base.texto,
+        apagado=_tom_com_contraste(base.fundo, base.texto, 4.5),
+        filete=_tom_com_contraste(base.fundo, base.texto, 3.0),
+        moldura=_tom_com_contraste(base.fundo, base.texto, 3.4),
+        acento=_acento_com_contraste(base.fundo, base.acento, base.texto, 4.5),
     )
 
 
