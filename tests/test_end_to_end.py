@@ -1170,7 +1170,23 @@ def test_visual_qa_page_cycle_captures_normal_busy_and_unavailable_controls(tmp_
     assert screenshot.is_file()
     with Image.open(screenshot) as captured:
         assert captured.size == (1093, 614)
-    assert (tmp_path / "ciclo-paginas-contact-sheet.png").is_file()
+        screenshot_pixels = captured.tobytes()
+    contact_sheet = tmp_path / "ciclo-paginas-contact-sheet.png"
+    assert contact_sheet.is_file()
+    with Image.open(contact_sheet) as captured:
+        assert captured.size == (1093, 614)
+        assert captured.tobytes() == screenshot_pixels
+    qa_state = json.loads((tmp_path / "ciclo-paginas-qa.json").read_text(encoding="utf-8"))
+    assert qa_state["scale_factor"] == 1.25
+    assert qa_state["scroll_maximum"] > 0
+    assert qa_state["scroll_before"] > 0
+    assert qa_state["scroll_after"] == qa_state["scroll_before"]
+
+
+def test_readme_explains_that_pages_without_alternatives_keep_a_disabled_control():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "visível, porém desabilitado" in readme
 
 
 def test_visual_qa_synthetic_portrait_has_injectable_face_box(tmp_path: Path):

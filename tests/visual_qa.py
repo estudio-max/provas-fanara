@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -286,17 +287,22 @@ def build_page_cycle_case(output: Path, *, dpi: int = 120) -> Path:
     ):
         QFontDatabase.addApplicationFont(font_name)
     app.setStyleSheet((Path(__file__).parents[1] / "provas" / "ui" / "theme.qss").read_text(encoding="utf-8"))
-    plan = BookPlan(
-        661, "prova", (),
-        (
+    pages = (
             PagePlan(1, "single-landscape", ("normal.jpg",), "opening"),
             PagePlan(2, "pair-asymmetric-left", ("ocupada-a.jpg", "ocupada-b.jpg"), "sequence"),
             PagePlan(3, "single-landscape", ("sem-alternativa.jpg",), "ending"),
+        *tuple(
+            PagePlan(number, "single-landscape", (f"overflow-{number}.jpg",), "sequence")
+            for number in range(4, 16)
         ),
     )
+    plan = BookPlan(
+        661, "prova", (), pages,
+    )
+    colors = ("#f1ede4", "#c8d8e7", "#e6d1c5", "#d7dfd3", "#ddd2e6")
     previews = tuple(
-        Image.new("RGB", (420, 297), color)
-        for color in ("#f1ede4", "#c8d8e7", "#e6d1c5", "#d7dfd3")
+        Image.new("RGB", (420, 297), colors[index % len(colors)])
+        for index in range(len(plan.pages) + 1)
     )
     window = MainWindow()
     window.resize(1093, 614)
@@ -309,9 +315,12 @@ def build_page_cycle_case(output: Path, *, dpi: int = 120) -> Path:
         window.preview_grid.set_previews(plan, previews)
         window.preview_grid.set_zoom(60)
         window.preview_grid.set_page_alternatives({1, 2})
+        app.processEvents()
         scrollbar = window.preview_grid.scroll_area.verticalScrollBar()
+        assert scrollbar.maximum() > 0
         scrollbar.setValue(min(24, scrollbar.maximum()))
         before_scroll = scrollbar.value()
+        assert before_scroll > 0
         window.preview_grid.set_page_busy(2, True)
         app.processEvents()
         assert scrollbar.value() == before_scroll
@@ -328,12 +337,22 @@ def build_page_cycle_case(output: Path, *, dpi: int = 120) -> Path:
             screenshot = screenshot.scaled(1093, 614)
         assert screenshot.size().width() == 1093 and screenshot.size().height() == 614
         assert screenshot.save(str(target))
-        render_pdf_contact = output / "ciclo-paginas-ui-capture.pdf"
-        document = pymupdf.open()
-        document.new_page(width=1093, height=614)
-        document.save(render_pdf_contact)
-        document.close()
-        render_pdf(render_pdf_contact, dpi=dpi, contact_sheet=output / "ciclo-paginas-contact-sheet.png")
+        contact_sheet = output / "ciclo-paginas-contact-sheet.png"
+        assert screenshot.save(str(contact_sheet))
+        scale_factor = round(app.primaryScreen().devicePixelRatio(), 2)
+        (output / "ciclo-paginas-qa.json").write_text(
+            json.dumps(
+                {
+                    "logical_size": [1093, 614],
+                    "scale_factor": scale_factor,
+                    "scroll_maximum": scrollbar.maximum(),
+                    "scroll_before": before_scroll,
+                    "scroll_after": scrollbar.value(),
+                },
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
         return target
     finally:
         window.close()

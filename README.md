@@ -36,7 +36,7 @@ Cada página interna com alternativa mostra o botão `↻`. Ele mantém as mesma
 fotos, mas pode permutar suas posições em uma diagramação compatível; os
 cliques percorrem o ciclo determinístico e voltam ao início. A escolha fica
 salva no projeto e vale tanto para a prévia quanto para o PDF. Capa e páginas
-sem alternativa não exibem esse controle.
+sem alternativa mantêm o controle visível, porém desabilitado.
 
 O motor narrativo avalia orientação, nitidez, exposição, densidade e
 similaridade. Com uma semente reproduzível, monta abertura, detalhes e respiros
