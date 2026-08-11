@@ -139,6 +139,7 @@ def test_open_project_dialog_is_accessible_and_uses_project_file_filter(
     qapp, tmp_path: Path, monkeypatch
 ):
     from provas.projeto import ProjectState, save_project
+    from provas.recursos import PRODUCT_NAME
     from provas.ui import MainWindow
 
     photo = str(tmp_path / "foto.jpg")
@@ -157,8 +158,8 @@ def test_open_project_dialog_is_accessible_and_uses_project_file_filter(
 
     window.open_project_button.click()
 
-    assert captured == [("Abrir projeto", "Projeto Fotolivro (*.provas.json);;JSON (*.json)")]
-    assert window.open_project_button.accessibleName() == "Abrir projeto Fotolivro"
+    assert captured == [("Abrir projeto", f"Projeto {PRODUCT_NAME} (*.provas.json);;JSON (*.json)")]
+    assert window.open_project_button.accessibleName() == f"Abrir projeto {PRODUCT_NAME}"
     assert "Ctrl+O" in {shortcut.key().toString() for shortcut in window.findChildren(QShortcut)}
     assert window.project_state is not None
 

@@ -1,4 +1,4 @@
-# Fotolivro editorial
+# Fanara - Fotolivro
 
 Aplicativo Windows para transformar a pasta de uma sessão em um fotolivro A4
 paisagem. Ele analisa as fotografias, propõe uma narrativa, mostra a prévia
@@ -17,7 +17,7 @@ python Provas.pyw
 
 `verificar.py` confirma as versões mínimas, fontes, escrita e o pipeline real
 de PDF A4 paisagem. No pacote distribuído, extraia a pasta inteira e abra
-`Fotolivro.exe`; Python não é necessário.
+`Fanara - Fotolivro.exe`; Python não é necessário.
 
 ## Fluxo da mesa de edição
 
@@ -104,8 +104,8 @@ mesa; PDFs já gerados permanecem inalterados.
 python empacotar.py
 ```
 
-O comando, executado no Windows, gera `dist/Fotolivro-Windows.zip` com
-`Fotolivro.exe`, o QSS, ícone, plugin de plataforma PySide6, NumPy, OpenCV,
+O comando, executado no Windows, gera `dist/Fanara - Fotolivro-Windows.zip` com
+`Fanara - Fotolivro.exe`, o QSS, ícone, plugin de plataforma PySide6, NumPy, OpenCV,
 o cascade facial local, `BUILD-MANIFEST.json` e `LEIA-ME.txt`.
 Como o executável não tem assinatura digital, o Windows pode pedir confirmação
 na primeira abertura.

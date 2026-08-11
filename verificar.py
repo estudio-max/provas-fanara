@@ -11,6 +11,8 @@ import platform
 import sys
 import tempfile
 
+from provas.recursos import PRODUCT_NAME
+
 try:
     from packaging.version import InvalidVersion, Version
 except ImportError:
@@ -84,7 +86,7 @@ def diagnosticar_dependencias() -> int:
 
 def testar_escrita() -> int:
     try:
-        descriptor, caminho = tempfile.mkstemp(prefix=".fotolivro-verificar-", dir=os.getcwd())
+        descriptor, caminho = tempfile.mkstemp(prefix=".fanara-fotolivro-verificar-", dir=os.getcwd())
         os.close(descriptor)
         os.unlink(caminho)
         linha(OK, f"permissão de escrita em {os.getcwd()}")
@@ -175,7 +177,7 @@ def testar_pipeline_editorial() -> int:
         from PIL import Image
         from provas import motor, tema
 
-        with tempfile.TemporaryDirectory(prefix="fotolivro-pipeline-") as pasta:
+        with tempfile.TemporaryDirectory(prefix="fanara-fotolivro-pipeline-") as pasta:
             foto = os.path.join(pasta, "amostra.jpg")
             saida = os.path.join(pasta, "amostra.pdf")
             Image.new("RGB", (300, 450), (110, 80, 60)).save(foto, "JPEG")
@@ -199,7 +201,7 @@ def testar_pipeline_editorial() -> int:
 
 
 def main(_argv: list[str] | None = None) -> int:
-    print(f"\nFotolivro — verificação\n{'-' * 52}")
+    print(f"\n{PRODUCT_NAME} — verificação\n{'-' * 52}")
     print(f"Sistema : {platform.system()} {platform.release()} ({platform.machine()})")
     print(f"Python  : {sys.version.split()[0]}\n")
 

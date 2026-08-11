@@ -158,6 +158,27 @@ def test_cli_rejeita_flags_que_quebrariam_os_modos_e_mantem_help_em_portugues(tm
     assert "--sem-marca" not in help_result.stdout
 
 
+def test_product_name_is_exposed_by_cli_diagnostics_and_readme():
+    from provas.recursos import PRODUCT_NAME
+
+    help_result = executar("--help")
+    diagnostic_result = subprocess.run(
+        [sys.executable, str(ROOT / "verificar.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert PRODUCT_NAME == "Fanara - Fotolivro"
+    assert PRODUCT_NAME in help_result.stdout
+    assert diagnostic_result.returncode == 0, diagnostic_result.stdout + diagnostic_result.stderr
+    assert PRODUCT_NAME in diagnostic_result.stdout
+    assert f"`{PRODUCT_NAME}.exe`" in readme
+    assert f"`dist/{PRODUCT_NAME}-Windows.zip`" in readme
+
+
 @pytest.mark.parametrize(
     ("args", "mensagem"),
     [

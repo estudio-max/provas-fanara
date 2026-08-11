@@ -225,14 +225,15 @@ def test_page_cycle_uses_the_same_page_appearance_as_export(tmp_path: Path):
 @pytest.fixture(scope="session")
 def built_package() -> Path:
     from empacotar import commit_atual, fingerprint_fontes
+    from provas.recursos import PRODUCT_NAME
 
-    package = ROOT / "dist" / "Fotolivro-Windows.zip"
+    package = ROOT / "dist" / f"{PRODUCT_NAME}-Windows.zip"
     current = {"git_commit": commit_atual(), "source_sha256": fingerprint_fontes()}
     manifest = None
     if package.is_file():
         try:
             with zipfile.ZipFile(package) as archive:
-                manifest = json.loads(archive.read("Fotolivro/BUILD-MANIFEST.json"))
+                manifest = json.loads(archive.read(f"{PRODUCT_NAME}/BUILD-MANIFEST.json"))
         except (KeyError, OSError, ValueError, zipfile.BadZipFile):
             manifest = None
     if not isinstance(manifest, dict) or any(manifest.get(key) != value for key, value in current.items()):
@@ -243,6 +244,14 @@ def built_package() -> Path:
         assert completed.returncode == 0, completed.stdout + completed.stderr
     assert package.is_file()
     return package
+
+
+def test_package_name_uses_the_approved_windows_artifact_root():
+    from empacotar import NOME
+    from provas.recursos import PRODUCT_NAME
+
+    assert NOME == PRODUCT_NAME
+    assert ROOT / "dist" / f"{PRODUCT_NAME}-Windows.zip" == ROOT / "dist" / "Fanara - Fotolivro-Windows.zip"
 
 
 @pytest.mark.parametrize(("case_name", "total", "orientation", "seed"), CASES)
@@ -890,11 +899,13 @@ def test_manual_cover_choice_survives_regeneration(tmp_path: Path):
 def test_packaged_executable_generates_both_modes_outside_source_tree(
     tmp_path: Path, built_package: Path,
 ):
+    from provas.recursos import PRODUCT_NAME
+
     package = built_package
     extracted = tmp_path / "pacote-extraido"
     with zipfile.ZipFile(package) as archive:
         archive.extractall(extracted)
-    executable = extracted / "Fotolivro" / "Fotolivro.exe"
+    executable = extracted / PRODUCT_NAME / f"{PRODUCT_NAME}.exe"
     session = _make_case(tmp_path, "pacote-sintetico", 6, "mixed")
 
     clean_environment = os.environ.copy()
@@ -1155,12 +1166,13 @@ def test_page_cycle_e2e_reassigns_photos_to_the_best_compatible_positions():
 
 def test_packaged_zip_contains_verifiable_source_manifest(built_package: Path):
     from empacotar import commit_atual, fingerprint_fontes
+    from provas.recursos import PRODUCT_NAME
 
     package = built_package
 
     with zipfile.ZipFile(package) as archive:
-        manifest = json.loads(archive.read("Fotolivro/BUILD-MANIFEST.json"))
-        executable_sha256 = hashlib.sha256(archive.read("Fotolivro/Fotolivro.exe")).hexdigest()
+        manifest = json.loads(archive.read(f"{PRODUCT_NAME}/BUILD-MANIFEST.json"))
+        executable_sha256 = hashlib.sha256(archive.read(f"{PRODUCT_NAME}/{PRODUCT_NAME}.exe")).hexdigest()
 
     assert manifest["source_sha256"] == fingerprint_fontes()
     assert manifest["git_commit"] == commit_atual()

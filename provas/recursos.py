@@ -5,9 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 import sys
 
-from PIL import Image, ImageDraw, ImageOps
-
-
+PRODUCT_NAME = "Fanara - Fotolivro"
 _SOURCE_SHA256 = "238ab90b9ad95451b1f888b864e4b6880cddafbfebf6d9ef20f711e3f6fcbe5c"
 _BRAND_RGB = (218, 66, 101)
 _ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
@@ -23,6 +21,8 @@ def caminho(nome: str) -> Path:
 
 
 def _brand_bounds(image: Image.Image) -> tuple[int, int, int, int]:
+    from PIL import Image
+
     rgb = image.convert("RGB")
     xs: list[int] = []
     ys: list[int] = []
@@ -41,6 +41,8 @@ def gerar_identidade_oficial(fonte: Path, simbolo: Path, icone: Path) -> None:
     O monograma aberto toca as bordas da fonte; por isso o alfa externo usa a
     silhueta convexa do rosa, e não flood-fill branco, que apagaria o ``ef``.
     """
+    from PIL import Image, ImageDraw, ImageOps
+
     if sha256(fonte.read_bytes()).hexdigest() != _SOURCE_SHA256:
         raise ValueError("A fonte do símbolo Fanara não corresponde ao arquivo autorizado.")
 

@@ -1,4 +1,4 @@
-"""Interface de linha de comando do Fotolivro editorial.
+"""Interface de linha de comando do Fanara - Fotolivro.
 
     python provas_cli.py "C:\\ensaios\\Bianca" --modo fotolivro --semente 42
     python provas_cli.py --abrir-projeto "C:\\ensaios\\Bianca.provas.json" --saida "C:\\entregas\\Bianca.pdf"
@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from provas import capas, motor, tema
 from provas.projeto import ProjectState, load_project, save_project
+from provas.recursos import PRODUCT_NAME
 
 
 MODOS = ("prova", "fotolivro")
@@ -106,7 +107,9 @@ def estilo_capa(value: str) -> str:
 
 def criar_parser() -> argparse.ArgumentParser:
     parser = ParserEmPortugues(
-        description="Gera um PDF editorial de uma sessão fotográfica.", add_help=False,
+        prog=PRODUCT_NAME,
+        description=f"{PRODUCT_NAME}: gera um PDF editorial de uma sessão fotográfica.",
+        add_help=False,
     )
     parser.add_argument("-h", "--help", "--ajuda", action="help", help="mostra esta ajuda e encerra")
     parser.add_argument("pasta", nargs="?", help="pasta com as fotos da sessão")

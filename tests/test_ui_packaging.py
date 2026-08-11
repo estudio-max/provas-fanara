@@ -165,6 +165,49 @@ def test_fanara_window_uses_official_symbol_and_icon_without_deformation(monkeyp
     app.processEvents()
 
 
+def test_product_name_is_visible_in_window_brand_and_project_filter(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog, QLabel
+    from provas.recursos import PRODUCT_NAME
+    from provas.ui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    captured: list[tuple[str, str]] = []
+
+    def choose(_parent, title, _default, file_filter):
+        captured.append((title, file_filter))
+        return "", file_filter
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", choose)
+    brand = window.findChild(QLabel, "brandName")
+    window.open_project_button.click()
+
+    assert window.windowTitle() == f"{PRODUCT_NAME} · Mesa de edição"
+    assert brand is not None and brand.text() == PRODUCT_NAME
+    assert window.open_project_button.accessibleName() == f"Abrir projeto {PRODUCT_NAME}"
+    assert captured == [("Abrir projeto", f"Projeto {PRODUCT_NAME} (*.provas.json);;JSON (*.json)")]
+    window.close()
+    app.processEvents()
+
+
+def test_product_name_is_used_for_the_qt_system_application_identity(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from provas import app as application
+    from provas.recursos import PRODUCT_NAME
+
+    class StandInWindow:
+        def show(self):
+            return None
+
+    qapp = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(application, "MainWindow", StandInWindow)
+
+    assert application.principal() == 0
+    assert qapp.applicationName() == PRODUCT_NAME
+
+
 def test_theme_qss_is_declared_for_wheels_and_pyinstaller():
     root = Path(__file__).parents[1]
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
@@ -220,16 +263,17 @@ def test_fanara_pyinstaller_bundles_only_tracked_identity_and_font_assets():
 
 def test_inspecao_do_zip_exige_ativos_e_rejeita_dados_do_usuario(tmp_path: Path):
     from empacotar import inspecionar_pacote
+    from provas.recursos import PRODUCT_NAME
 
-    pacote = tmp_path / "Fotolivro-Windows.zip"
+    pacote = tmp_path / f"{PRODUCT_NAME}-Windows.zip"
     with zipfile.ZipFile(pacote, "w") as archive:
         for name in (
-            "Fotolivro/Fotolivro.exe",
-            "Fotolivro/BUILD-MANIFEST.json",
-            "Fotolivro/LEIA-ME.txt",
-            "Fotolivro/_internal/provas/ui/theme.qss",
-            "Fotolivro/_internal/PySide6/plugins/platforms/qwindows.dll",
-            "Fotolivro/_internal/cv2/data/haarcascade_frontalface_default.xml",
+            f"{PRODUCT_NAME}/{PRODUCT_NAME}.exe",
+            f"{PRODUCT_NAME}/BUILD-MANIFEST.json",
+            f"{PRODUCT_NAME}/LEIA-ME.txt",
+            f"{PRODUCT_NAME}/_internal/provas/ui/theme.qss",
+            f"{PRODUCT_NAME}/_internal/PySide6/plugins/platforms/qwindows.dll",
+            f"{PRODUCT_NAME}/_internal/cv2/data/haarcascade_frontalface_default.xml",
         ):
             archive.writestr(name, b"ok")
         for asset in (
@@ -238,19 +282,19 @@ def test_inspecao_do_zip_exige_ativos_e_rejeita_dados_do_usuario(tmp_path: Path)
             ROOT / "assets" / "fonts" / "BodoniModa[opsz,wght].ttf",
             ROOT / "assets" / "fonts" / "OFL-BodoniModa.txt",
         ):
-            archive.writestr(f"Fotolivro/_internal/{asset.relative_to(ROOT).as_posix()}", asset.read_bytes())
+            archive.writestr(f"{PRODUCT_NAME}/_internal/{asset.relative_to(ROOT).as_posix()}", asset.read_bytes())
 
     assert inspecionar_pacote(pacote) == ()
 
     with zipfile.ZipFile(pacote, "a") as archive:
-        archive.writestr("Fotolivro/config.json", b"privado")
-        archive.writestr("Fotolivro/sessao.jpg", b"fotografia")
-        archive.writestr("Fotolivro/marca-cliente.png", b"logotipo")
-        archive.writestr("Fotolivro/marca-alternativa.bmp", b"logotipo")
-        archive.writestr("Fotolivro/marca-animada.gif", b"logotipo")
-        archive.writestr("Fotolivro/marca-web.webp", b"logotipo")
-        archive.writestr("Fotolivro/foto-camera.NEF", b"raw")
-        archive.writestr("Fotolivro/cliente.provas.json", b"projeto")
+        archive.writestr(f"{PRODUCT_NAME}/config.json", b"privado")
+        archive.writestr(f"{PRODUCT_NAME}/sessao.jpg", b"fotografia")
+        archive.writestr(f"{PRODUCT_NAME}/marca-cliente.png", b"logotipo")
+        archive.writestr(f"{PRODUCT_NAME}/marca-alternativa.bmp", b"logotipo")
+        archive.writestr(f"{PRODUCT_NAME}/marca-animada.gif", b"logotipo")
+        archive.writestr(f"{PRODUCT_NAME}/marca-web.webp", b"logotipo")
+        archive.writestr(f"{PRODUCT_NAME}/foto-camera.NEF", b"raw")
+        archive.writestr(f"{PRODUCT_NAME}/cliente.provas.json", b"projeto")
     problemas = inspecionar_pacote(pacote)
     assert any("config.json" in problema for problema in problemas)
     assert any("sessao.jpg" in problema for problema in problemas)
@@ -264,10 +308,11 @@ def test_inspecao_do_zip_exige_ativos_e_rejeita_dados_do_usuario(tmp_path: Path)
 
 def test_fanara_zip_rejects_official_filename_with_untracked_content(tmp_path: Path):
     from empacotar import inspecionar_pacote
+    from provas.recursos import PRODUCT_NAME
 
-    pacote = tmp_path / "Fotolivro-Windows.zip"
+    pacote = tmp_path / f"{PRODUCT_NAME}-Windows.zip"
     with zipfile.ZipFile(pacote, "w") as archive:
-        archive.writestr("Fotolivro/_internal/assets/fanara-symbol.png", b"imagem substituida")
+        archive.writestr(f"{PRODUCT_NAME}/_internal/assets/fanara-symbol.png", b"imagem substituida")
 
     problemas = inspecionar_pacote(pacote)
     assert any("hash" in problema and "fanara-symbol.png" in problema for problema in problemas)
@@ -286,10 +331,11 @@ def test_fanara_verifier_confirms_tracked_identity_font_and_license(capsys):
 
 def test_packaging_removes_user_configuration_and_logo_but_keeps_application_files(tmp_path: Path):
     from empacotar import remover_dados_usuario
+    from provas.recursos import PRODUCT_NAME
 
     (tmp_path / "config.json").write_text("dados pessoais", encoding="utf-8")
     (tmp_path / "logo.png").write_bytes(b"marca do usuario")
-    (tmp_path / "Fotolivro.exe").write_bytes(b"executavel")
+    (tmp_path / f"{PRODUCT_NAME}.exe").write_bytes(b"executavel")
     (tmp_path / "provas" / "ui").mkdir(parents=True)
     theme = tmp_path / "provas" / "ui" / "theme.qss"
     theme.write_text("QWidget {}", encoding="utf-8")
@@ -298,8 +344,26 @@ def test_packaging_removes_user_configuration_and_logo_but_keeps_application_fil
 
     assert not (tmp_path / "config.json").exists()
     assert not (tmp_path / "logo.png").exists()
-    assert (tmp_path / "Fotolivro.exe").exists()
+    assert (tmp_path / f"{PRODUCT_NAME}.exe").exists()
     assert theme.exists()
+
+
+def test_package_name_centralizes_artifacts_manifest_and_public_text():
+    from empacotar import LEIAME_WINDOWS, NOME
+    from provas.recursos import PRODUCT_NAME
+
+    source = (ROOT / "empacotar.py").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    obsolete_executable_path = "Fotolivro" + "/Fotolivro.exe"
+    obsolete_package_path = "dist/Fotolivro" + "-Windows.zip"
+
+    assert NOME == PRODUCT_NAME
+    assert f'"{PRODUCT_NAME}.exe"' in LEIAME_WINDOWS
+    assert f"dist/{PRODUCT_NAME}-Windows.zip" in readme
+    assert obsolete_executable_path not in source
+    assert obsolete_package_path not in source
+    assert obsolete_executable_path not in readme
+    assert obsolete_package_path not in readme
 
 
 def test_windows_packager_recuses_other_platforms(monkeypatch, capsys):

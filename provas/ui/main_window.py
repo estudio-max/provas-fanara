@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("mainWindow")
-        self.setWindowTitle("Fotolivro · Mesa de edição")
+        self.setWindowTitle(f"{recursos.PRODUCT_NAME} · Mesa de edição")
         self.setWindowIcon(QIcon(str(recursos.caminho("icone.ico"))))
         self.setMinimumSize(840, 540)
         self.resize(1366, 768)
@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         brand = QVBoxLayout()
         brand.setContentsMargins(0, 0, 0, 0)
         brand.setSpacing(0)
-        name = QLabel("Fotolivro")
+        name = QLabel(recursos.PRODUCT_NAME)
         name.setObjectName("brandName")
         self.project_label = QLabel("Novo projeto")
         self.project_label.setObjectName("mutedText")
@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.status_label, 1)
 
         self.open_project_button = QPushButton("Abrir projeto")
-        self.open_project_button.setAccessibleName("Abrir projeto Fotolivro")
+        self.open_project_button.setAccessibleName(f"Abrir projeto {recursos.PRODUCT_NAME}")
         self.open_project_button.setToolTip("Abrir um projeto salvo (Ctrl+O)")
         self.open_project_button.setFixedWidth(112)
         self.save_button = QPushButton("Salvar projeto")
@@ -203,7 +203,7 @@ class MainWindow(QMainWindow):
             self,
             "Abrir projeto",
             self.folder_path,
-            "Projeto Fotolivro (*.provas.json);;JSON (*.json)",
+            f"Projeto {recursos.PRODUCT_NAME} (*.provas.json);;JSON (*.json)",
         )
         if path:
             self.open_project(path)
@@ -1082,12 +1082,12 @@ class MainWindow(QMainWindow):
     def save_project_dialog(self) -> None:
         if self.project_state is None or self.is_busy:
             return
-        default = os.path.join(self.folder_path, "fotolivro.provas.json")
+        default = os.path.join(self.folder_path, "fanara-fotolivro.provas.json")
         path, _filter = QFileDialog.getSaveFileName(
             self,
             "Salvar projeto",
             default,
-            "Projeto Fotolivro (*.provas.json);;JSON (*.json)",
+            f"Projeto {recursos.PRODUCT_NAME} (*.provas.json);;JSON (*.json)",
         )
         if path:
             try:

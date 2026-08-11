@@ -6,6 +6,7 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from .recursos import PRODUCT_NAME
 from .ui import MainWindow
 
 
@@ -18,7 +19,7 @@ def principal() -> int:
     owns_application = app is None
     if app is None:
         app = QApplication(sys.argv)
-    app.setApplicationName("Fotolivro")
+    app.setApplicationName(PRODUCT_NAME)
     app.setOrganizationName("Provas")
     window = MainWindow()
     window.show()

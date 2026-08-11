@@ -1,8 +1,8 @@
-"""Gera o pacote Windows do Fotolivro editorial.
+"""Gera o pacote Windows do Fanara - Fotolivro.
 
     python empacotar.py
 
-Produz `dist/Fotolivro/` e `dist/Fotolivro-Windows.zip`. Este empacotador é
+Produz `dist/Fanara - Fotolivro/` e `dist/Fanara - Fotolivro-Windows.zip`. Este empacotador é
 deliberadamente Windows-only: o PyInstaller não faz compilação cruzada.
 """
 from __future__ import annotations
@@ -16,8 +16,10 @@ import subprocess
 import sys
 import zipfile
 
+from provas.recursos import PRODUCT_NAME
+
 RAIZ = os.path.dirname(os.path.abspath(__file__))
-NOME = "Fotolivro"
+NOME = PRODUCT_NAME
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
 MANIFESTO = "BUILD-MANIFEST.json"
 OFFICIAL_ASSETS = {
@@ -25,10 +27,10 @@ OFFICIAL_ASSETS = {
     for name in ("fanara-symbol.png", "icone.ico")
 }
 
-LEIAME_WINDOWS = """FOTOLIVRO — PDF editorial a partir da pasta do ensaio
+LEIAME_WINDOWS = f"""{PRODUCT_NAME} — PDF editorial a partir da pasta do ensaio
 
 PRIMEIRO USO
-1. Extraia a pasta inteira e abra "Fotolivro.exe". Não separe a pasta
+1. Extraia a pasta inteira e abra "{PRODUCT_NAME}.exe". Não separe a pasta
    "_internal", pois ela contém as bibliotecas do aplicativo.
 2. Clique em "Escolher pasta" e depois em "Analisar fotografias".
 3. Escolha "Prova para seleção" (marca d'água e códigos) ou "Fotolivro limpo"
@@ -92,10 +94,11 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
     from PIL import Image
 
     obrigatorios = (
-        "Fotolivro/Fotolivro.exe",
-        "Fotolivro/BUILD-MANIFEST.json",
-        "Fotolivro/LEIA-ME.txt",
+        f"{NOME}/{NOME}.exe",
+        f"{NOME}/BUILD-MANIFEST.json",
+        f"{NOME}/LEIA-ME.txt",
     )
+    prefixo_interno = f"{NOME.casefold()}/_internal/"
     problemas: list[str] = []
     with zipfile.ZipFile(pacote) as archive:
         nomes = tuple(name.replace("\\", "/") for name in archive.namelist())
@@ -103,7 +106,7 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
             name.lower(): hashlib.sha256(archive.read(original)).hexdigest()
             for name, original in zip(nomes, archive.namelist())
             if name.lower() in {
-                f"fotolivro/_internal/assets/{asset}" for asset in OFFICIAL_ASSETS
+                f"{prefixo_interno}assets/{asset}" for asset in OFFICIAL_ASSETS
             }
         }
     minusculos = tuple(name.lower() for name in nomes)
@@ -114,10 +117,10 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         "QSS": lambda name: name.endswith("/provas/ui/theme.qss"),
         "qwindows": lambda name: name.endswith("/pyside6/plugins/platforms/qwindows.dll"),
         "cascade Haar": lambda name: name.endswith("/cv2/data/haarcascade_frontalface_default.xml"),
-        "símbolo Fanara": lambda name: name == "fotolivro/_internal/assets/fanara-symbol.png",
-        "ícone Fanara": lambda name: name == "fotolivro/_internal/assets/icone.ico",
-        "Bodoni Moda": lambda name: name == "fotolivro/_internal/assets/fonts/bodonimoda[opsz,wght].ttf",
-        "licença OFL": lambda name: name == "fotolivro/_internal/assets/fonts/ofl-bodonimoda.txt",
+        "símbolo Fanara": lambda name: name == f"{prefixo_interno}assets/fanara-symbol.png",
+        "ícone Fanara": lambda name: name == f"{prefixo_interno}assets/icone.ico",
+        "Bodoni Moda": lambda name: name == f"{prefixo_interno}assets/fonts/bodonimoda[opsz,wght].ttf",
+        "licença OFL": lambda name: name == f"{prefixo_interno}assets/fonts/ofl-bodonimoda.txt",
     }
     for rotulo, presente in ativos.items():
         if not any(presente(name) for name in minusculos):
@@ -133,7 +136,7 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         elif name.endswith(".provas.json"):
             problemas.append(f"projeto de usuário incluído: {name}")
         elif name in {
-            f"fotolivro/_internal/assets/{asset}" for asset in OFFICIAL_ASSETS
+            f"{prefixo_interno}assets/{asset}" for asset in OFFICIAL_ASSETS
         }:
             asset = Path(name).name
             if hashes.get(name) != OFFICIAL_ASSETS[asset]:
