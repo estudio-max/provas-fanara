@@ -649,8 +649,11 @@ class MainWindow(QMainWindow):
         page_number = self._active_page_cycle_number()
         self._release_page_cycle_page(page_number)
         detail = message.strip().rstrip(".") or "ocorreu um erro inesperado"
+        prefix = "Não foi possível atualizar a página:"
+        if detail.startswith(prefix):
+            detail = detail.removeprefix(prefix).strip() or "ocorreu um erro inesperado"
         self.set_status(
-            f"Não foi possível atualizar a página: {detail}. A fila continuará.", "error",
+            f"{prefix} {detail}. A fila continuará.", "error",
         )
         self._start_next_page_cycle()
         self._finish_page_cycle_queue()

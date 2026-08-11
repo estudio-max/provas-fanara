@@ -238,6 +238,44 @@ def test_load_rejects_all_page_photos_when_none_belong_to_the_project(tmp_path: 
         projeto.load_project(source)
 
 
+def test_load_rejects_cover_photo_that_is_not_part_of_the_project(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["plan"]["cover_photo_ids"] = [str(tmp_path / "capa-intrusa.jpg")]
+    source = tmp_path / "capa-intrusa.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(projeto.ProjectSchemaError, match="foto da capa.*não pertence ao projeto"):
+        projeto.load_project(source)
+
+
+def test_load_rejects_duplicate_cover_photos(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["plan"]["cover_photo_ids"] = [state.photo_paths[0], state.photo_paths[0]]
+    source = tmp_path / "capa-duplicada.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(projeto.ProjectSchemaError, match="capa.*duplicadas"):
+        projeto.load_project(source)
+
+
+def test_load_preserves_a_project_without_cover_photos(tmp_path: Path):
+    from provas import projeto
+
+    state, _ = _state(tmp_path)
+    payload = projeto._state_to_data(state)
+    payload["plan"]["cover_photo_ids"] = []
+    source = tmp_path / "sem-capa.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert projeto.load_project(source).plan.cover_photo_ids == ()
+
+
 def test_load_rejects_page_template_with_incompatible_photo_count(tmp_path: Path):
     from provas import projeto
 

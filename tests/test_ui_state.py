@@ -1023,6 +1023,23 @@ def test_page_cycle_failure_releases_its_button_and_continues_the_queue(qapp, pl
     assert "falha simulada" in window.status_message
 
 
+def test_page_cycle_failure_does_not_duplicate_the_worker_error_prefix(qapp, plan):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    window._page_cycle_worker = type("Worker", (), {"page_number": 1})()  # type: ignore[assignment]
+    window._page_cycle_busy = {1}
+
+    window._page_cycle_failed(
+        "Não foi possível atualizar a página: arquivo de imagem ilegível"
+    )
+
+    assert window.status_message == (
+        "Não foi possível atualizar a página: arquivo de imagem ilegível. A fila continuará."
+    )
+
+
 def test_page_cycle_cancellation_clears_pending_pages_and_restores_global_actions(qapp, plan):
     from provas.ui import MainWindow
 
@@ -1195,8 +1212,27 @@ def test_page_cycle_result_can_be_saved_and_reopened(qapp, tmp_path: Path):
     assert load_project(destination).plan == cycled
 
 
-def test_page_cycle_click_runs_worker_and_keeps_preview_interactions_available(qapp, plan):
+def test_page_cycle_click_runs_worker_and_keeps_preview_interactions_available(qapp, plan, monkeypatch):
+    from provas.motor import PageCycleResult
     from provas.ui import MainWindow
+    from provas.ui import main_window
+    from provas.ui.workers import PageCycleWorker
+
+    def operation(_config, supplied_plan, page_number, _width, *, cancelar):
+        cycled = replace(
+            supplied_plan,
+            pages=(
+                replace(supplied_plan.pages[0], template_id="single-full"),
+                *supplied_plan.pages[1:],
+            ),
+        )
+        return PageCycleResult(cycled, page_number, Image.new("RGB", (420, 297), "#d84a68"))
+
+    class PreviewPageCycleWorker(PageCycleWorker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, operation=operation, **kwargs)
+
+    monkeypatch.setattr(main_window, "PageCycleWorker", PreviewPageCycleWorker)
 
     for index, photo_id in enumerate(
         photo_id for page in plan.pages for photo_id in page.photo_ids
@@ -1219,7 +1255,14 @@ def test_page_cycle_click_runs_worker_and_keeps_preview_interactions_available(q
     assert window.project_state is not None
     assert window.project_state.plan.pages[0] != original.pages[0]
     assert window.preview_grid.zoom_in_button.isEnabled()
+    while window._threads and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert not window._threads
     window.close()
+    window.deleteLater()
+    qapp.processEvents()
 
 
 def test_close_waits_for_active_page_cycle_thread_to_stop(qapp, tmp_path: Path, plan, monkeypatch):
@@ -1243,8 +1286,7 @@ def test_close_waits_for_active_page_cycle_thread_to_stop(qapp, tmp_path: Path, 
     window.apply_analysis_result(plan)
     window.previews = (object(),)
     window.request_page_cycle(1)
-    for _ in range(3):
-        qapp.processEvents()
+    assert window._threads
 
     window.close()
 

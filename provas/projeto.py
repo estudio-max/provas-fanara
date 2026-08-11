@@ -171,6 +171,14 @@ def _validate_persisted_plan(plan: BookPlan, photo_paths: tuple[str, ...]) -> No
     """Reject page references that cannot be rendered from this project file."""
     project_photos = set(photo_paths)
     templates = {template.id: template for template in catalog()}
+    missing_cover = next(
+        (photo_id for photo_id in plan.cover_photo_ids if photo_id not in project_photos),
+        None,
+    )
+    if missing_cover is not None:
+        raise ProjectSchemaError("Projeto inválido: a foto da capa não pertence ao projeto.")
+    if len(set(plan.cover_photo_ids)) != len(plan.cover_photo_ids):
+        raise ProjectSchemaError("Projeto inválido: a capa contém fotos duplicadas.")
     for page in plan.pages:
         missing = next((photo_id for photo_id in page.photo_ids if photo_id not in project_photos), None)
         if missing is not None:
