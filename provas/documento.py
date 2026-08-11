@@ -254,7 +254,8 @@ class Documento:
                  logo: bytes | None, logo_proporcao: float = 1200 / 630,
                  rodape: str = "", nota_capa: str = "", estudio: str = "",
                  site: str = "", paleta: tema.Paleta | None = None,
-                 modo: str = "prova") -> None:
+                 modo: str = "prova", paleta_capa: tema.Paleta | None = None,
+                 sombra_fotos: bool = False) -> None:
         if modo not in {"prova", "fotolivro"}:
             raise ValueError(f"Unsupported mode: {modo}")
         self.pdf = pymupdf.open()
@@ -263,6 +264,8 @@ class Documento:
         self.estudio = estudio
         self.site = site
         self.p = paleta or tema.paleta()
+        self.p_capa = paleta_capa or self.p
+        self.sombra_fotos = bool(sombra_fotos)
         self.titulo = titulo
         self.subtitulo = subtitulo
         self.paisagem = paisagem
@@ -271,6 +274,23 @@ class Documento:
         self.logo_proporcao = logo_proporcao
         self.modo = modo
         self.tamanho = tema.A4_PAISAGEM if paisagem else tema.A4
+
+    @staticmethod
+    def _sombra_foto(
+        page: pymupdf.Page,
+        image_rect: pymupdf.Rect,
+        slot_bounds: pymupdf.Rect,
+    ) -> None:
+        """Draw a clipped vector shadow behind one physical photograph."""
+        for offset, expansion, opacity in ((1.5, 1.5, 0.075), (3.0, 2.0, 0.045), (5.0, 3.0, 0.025)):
+            shadow = pymupdf.Rect(
+                image_rect.x0 - expansion + offset,
+                image_rect.y0 - expansion + offset,
+                image_rect.x1 + expansion + offset,
+                image_rect.y1 + expansion + offset,
+            ) & slot_bounds
+            if not shadow.is_empty:
+                page.draw_rect(shadow, color=None, fill=(0, 0, 0), fill_opacity=opacity)
 
     def nova_pagina(self) -> pymupdf.Page:
         pagina = self.pdf.new_page(width=self.tamanho[0], height=self.tamanho[1])
@@ -308,6 +328,8 @@ class Documento:
             physical_bounds = Rect(slot_points.x0, slot_points.y0, slot_points.width, slot_points.height)
             contained = fit_contain(physical_bounds, asset.ratio)
             image_rect = pymupdf.Rect(contained.x, contained.y, contained.right, contained.bottom)
+            if self.sombra_fotos:
+                self._sombra_foto(page, image_rect, slot_points)
             page.insert_image(image_rect, stream=asset.jpeg, keep_proportion=True)
             page.draw_rect(image_rect, color=self.p.moldura, width=0.45)
 
@@ -387,6 +409,8 @@ class Documento:
 
         cartao = pymupdf.Rect(foto.x0 - tema.RESPIRO_CARTAO, foto.y0 - tema.RESPIRO_CARTAO,
                               foto.x1 + tema.RESPIRO_CARTAO, foto.y1 + altura_legenda)
+        if self.sombra_fotos:
+            self._sombra_foto(pagina, foto, caixa)
         pagina.insert_image(foto, stream=jpeg, keep_proportion=True)
         pagina.draw_rect(foto, color=self.p.moldura, width=0.5)
 
@@ -417,7 +441,7 @@ class Documento:
 
         cover_label = "PROVAS DO ENSAIO" if self.modo == "prova" else "FOTOLIVRO"
         self.tipo.escrever(pagina, centro, base, cover_label, NOME_SANS_MEDIO, 8,
-                           self.p.acento, 3.4, "centro")
+                           self.p_capa.acento, 3.4, "centro")
 
         if self.logo:
             largura_logo = min(150.0 if compacto else 180.0,
@@ -433,22 +457,22 @@ class Documento:
         tamanho_titulo = 22 if compacto else 25
         titulo = self.tipo.encaixar(self.titulo, NOME_SERIF, tamanho_titulo, largura - 90)
         self.tipo.escrever(pagina, centro, base, titulo, NOME_SERIF, tamanho_titulo,
-                           self.p.texto, 0.4, "centro")
+                           self.p_capa.texto, 0.4, "centro")
 
         pagina.draw_line((centro - 18, base + 18), (centro + 18, base + 18),
-                         color=self.p.acento, width=1.1)
+                         color=self.p_capa.acento, width=1.1)
 
         meta = " · ".join(p for p in (self.subtitulo, f"{quantidade} FOTOS") if p)
         self.tipo.escrever(pagina, centro, base + 38, meta.upper(), NOME_SANS, 7.5,
-                           self.p.apagado, 2.2, "centro")
+                           self.p_capa.apagado, 2.2, "centro")
 
         y_chamada = base + 64 if compacto else altura - 74
         self.tipo.escrever(pagina, centro, y_chamada, chamada, NOME_SERIF_ITALICO, 10.5,
-                           self.p.texto, 0, "centro")
+                           self.p_capa.texto, 0, "centro")
         self.tipo.escrever(pagina, centro, y_chamada + 18, self.nota_capa, NOME_SANS, 6.6,
-                           self.p.apagado, 2.0, "centro")
+                           self.p_capa.apagado, 2.0, "centro")
         self.tipo.escrever(pagina, centro, altura - 32, self.site, NOME_SANS_MEDIO, 6.6,
-                           self.p.acento, 1.6, "centro")
+                           self.p_capa.acento, 1.6, "centro")
 
     def salvar(self, caminho: str) -> None:
         suffix = "provas" if self.modo == "prova" else "fotolivro"

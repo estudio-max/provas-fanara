@@ -481,7 +481,8 @@ def _logo_document(
 
 
 def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
-    logo, logo_ratio, palette, warnings = _logo_document(config)
+    logo, logo_ratio, cover_palette, warnings = _logo_document(config)
+    page_palette = tema.paleta_paginas(config.fundo_paginas)
     result = documento.Documento(
         config.titulo,
         config.subtitulo,
@@ -492,7 +493,9 @@ def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
         nota_capa="CADA FOTO TRAZ SEU CÓDIGO LOGO ABAIXO" if mode == "prova" else "",
         estudio=config.estudio,
         site=config.site,
-        paleta=palette,
+        paleta=page_palette,
+        paleta_capa=cover_palette,
+        sombra_fotos=config.sombra_fotos,
         modo=mode,
     )
     result.cover_warnings = warnings
@@ -664,7 +667,7 @@ def _render_cover(
                     source.close()
         if config.estilo_capa == "mosaico":
             cover = capas.gerar(
-                "mosaico", [photo.image for photo in cover_photos], width, height, doc.p
+                "mosaico", [photo.image for photo in cover_photos], width, height, doc.p_capa
             )
         elif config.estilo_capa == "curvas_editoriais":
             cover = capas.gerar(
@@ -672,7 +675,7 @@ def _render_cover(
                 cover_photos,
                 width,
                 height,
-                doc.p,
+                doc.p_capa,
                 identity=IdentityData(
                     config.titulo, config.estudio, config.site, config.logo
                 ),
@@ -856,7 +859,8 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
         raise ValueError("Nenhuma foto encontrada nessa pasta.")
 
     dpi, qualidade_jpeg = QUALIDADES.get(config.qualidade, QUALIDADES["normal"])
-    cores = tema.paleta(config.cor_fundo)
+    cover_palette = tema.paleta(config.cor_fundo)
+    page_palette = tema.paleta_paginas(config.fundo_paginas)
 
     caminho_logo = config.logo.strip()
     legacy_cover_warnings: list[CoverWarning] = []
@@ -889,7 +893,7 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
     logo_png, logo_proporcao = None, 1200 / 630
     if logo_base is not None:
         # em fundo escuro o preto do logotipo vira branco; em fundo claro ele fica como é
-        versao = logo_base if cores.claro else imagens.logo_bicolor(logo_base)
+        versao = logo_base if cover_palette.claro else imagens.logo_bicolor(logo_base)
         buffer = io.BytesIO()
         versao.save(buffer, format="PNG")
         logo_png = buffer.getvalue()
@@ -956,7 +960,8 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
         config.titulo, config.subtitulo, config.paisagem, tipografia, logo_png, logo_proporcao,
         rodape="ANOTE OS CÓDIGOS DAS FOTOS ESCOLHIDAS" if config.mostrar_codigos else "",
         nota_capa="CADA FOTO TRAZ SEU CÓDIGO LOGO ABAIXO" if config.mostrar_codigos else "",
-        estudio=config.estudio, site=config.site, paleta=cores)
+        estudio=config.estudio, site=config.site, paleta=page_palette,
+        paleta_capa=cover_palette, sombra_fotos=config.sombra_fotos)
 
     try:
         if config.capa_mosaico:
@@ -972,7 +977,7 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
                 cover_items: list[Image.Image] | list[capas.CoverPhoto] = [
                     preparada.miniatura for preparada in prontas
                 ]
-                capa = capas.gerar("mosaico", cover_items, largura_px, altura_px, cores)
+                capa = capas.gerar("mosaico", cover_items, largura_px, altura_px, cover_palette)
             else:
                 by_id = {preparada.photo_id: preparada for preparada in prontas}
                 ordered = [
@@ -991,7 +996,7 @@ def gerar(config: Config, progresso=None, cancelar: threading.Event | None = Non
                     cover_items,
                     largura_px,
                     altura_px,
-                    cores,
+                    cover_palette,
                     identity=IdentityData(
                         config.titulo, config.estudio, config.site, config.logo
                     ),

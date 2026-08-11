@@ -148,6 +148,80 @@ def _pdf_images(pdf: pymupdf.Document, page_index: int) -> list[Image.Image]:
     return images
 
 
+@pytest.mark.parametrize("mode", ("prova", "fotolivro"))
+@pytest.mark.parametrize("background", ("branco", "cinza", "preto"))
+@pytest.mark.parametrize("shadow", (False, True))
+def test_page_appearance_keeps_cover_photos_and_preview_pdf_identical(
+    tmp_path: Path,
+    mode: str,
+    background: str,
+    shadow: bool,
+):
+    """Appearance is internal-only: the cover and JPEG streams never change."""
+    session = _make_case(tmp_path, "aparencia", 6, "mixed")
+    base_output = tmp_path / f"base-{mode}.pdf"
+    base = motor.Config(
+        str(session), saida=str(base_output), modo=mode, estilo_capa="mosaico",
+        qualidade="leve", semente=817,
+    )
+    analysis = motor.analisar_plano(base)
+    base_preview = motor.gerar_preview(base, analysis.plan, width=320)
+    motor.exportar(base, analysis.plan)
+
+    output = tmp_path / f"{background}-{shadow}-{mode}.pdf"
+    configured = motor.Config(**{
+        **base.__dict__, "saida": str(output), "fundo_paginas": background, "sombra_fotos": shadow,
+    })
+    preview = motor.gerar_preview(configured, analysis.plan, width=320)
+    motor.exportar(configured, analysis.plan)
+
+    with pymupdf.open(base_output) as base_pdf, pymupdf.open(output) as pdf:
+        assert pdf.page_count == base_pdf.page_count == len(preview)
+        base_cover = _render_at_width(base_pdf[0], 320)
+        cover = _render_at_width(pdf[0], 320)
+        try:
+            assert cover.tobytes() == base_cover.tobytes() == preview[0].tobytes() == base_preview[0].tobytes()
+        finally:
+            cover.close()
+            base_cover.close()
+        for index, page in enumerate(pdf):
+            rendered = _render_at_width(page, 320)
+            try:
+                assert rendered.tobytes() == preview[index].tobytes()
+            finally:
+                rendered.close()
+        for index in range(1, pdf.page_count):
+            actual = [pdf.extract_image(image[0])["image"] for image in pdf[index].get_images(full=True)]
+            expected = [
+                base_pdf.extract_image(image[0])["image"]
+                for image in base_pdf[index].get_images(full=True)
+            ]
+            assert actual == expected
+
+    for image in (*base_preview, *preview):
+        image.close()
+
+
+def test_page_cycle_uses_the_same_page_appearance_as_export(tmp_path: Path):
+    session = _make_case(tmp_path, "aparencia-ciclo", 6, "mixed")
+    output = tmp_path / "aparencia-ciclo.pdf"
+    config = motor.Config(
+        str(session), saida=str(output), modo="fotolivro", capa_mosaico=False,
+        fundo_paginas="preto", sombra_fotos=True, qualidade="leve", semente=1201,
+    )
+    analysis = motor.analisar_plano(config)
+    cycled = motor.ciclar_preview_pagina(config, analysis.plan, 1, 320)
+    motor.exportar(config, cycled.plan)
+
+    with pymupdf.open(output) as pdf:
+        rendered = _render_at_width(pdf[cycled.page_number - 1], 320)
+        try:
+            assert rendered.tobytes() == cycled.thumbnail.tobytes()
+        finally:
+            rendered.close()
+    cycled.thumbnail.close()
+
+
 @pytest.fixture(scope="session")
 def built_package() -> Path:
     from empacotar import commit_atual, fingerprint_fontes

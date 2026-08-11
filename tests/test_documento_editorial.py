@@ -27,6 +27,103 @@ def _point_rect(rect, page_width: float, page_height: float) -> pymupdf.Rect:
 
 
 @pytest.mark.parametrize(
+    ("background", "expected_rgb"),
+    (("branco", (255, 255, 255)), ("cinza", (210, 210, 210)), ("preto", (17, 18, 21))),
+)
+@pytest.mark.parametrize("shadow", (False, True))
+@pytest.mark.parametrize("mode", ("prova", "fotolivro"))
+def test_page_background_and_photo_shadow_preserve_photos_and_slots(
+    tmp_path: Path,
+    image_factory,
+    background: str,
+    expected_rgb: tuple[int, int, int],
+    shadow: bool,
+    mode: str,
+):
+    """Every internal-page preset is exact and shadow layers stay inside their slots."""
+    from provas import tema
+    from provas.documento import Documento, Tipografia
+
+    paths = (
+        image_factory("shadow-portrait.jpg", size=(200, 300), color=(220, 40, 40)),
+        image_factory("shadow-landscape.jpg", size=(300, 200), color=(40, 80, 220)),
+    )
+    infos = tuple(_photo(path, index) for index, path in enumerate(paths))
+    page_plan = PagePlan(1, "pair-asymmetric-left", tuple(info.id for info in infos), "opening")
+    template = next(item for item in catalog() if item.id == page_plan.template_id).resolve(mode)
+    document = Documento(
+        "Ensaio", "", True, Tipografia(), None,
+        paleta=tema.paleta_paginas(background), sombra_fotos=shadow, modo=mode,
+    )
+    document.render_page(page_plan, template, {info.id: info for info in infos})
+    output = tmp_path / f"{background}-{shadow}-{mode}.pdf"
+    document.salvar(str(output))
+    document.fechar()
+    baseline = Documento(
+        "Ensaio", "", True, Tipografia(), None,
+        paleta=tema.paleta_paginas(background), sombra_fotos=False, modo=mode,
+    )
+    baseline.render_page(page_plan, template, {info.id: info for info in infos})
+    baseline_output = tmp_path / f"{background}-baseline-{mode}.pdf"
+    baseline.salvar(str(baseline_output))
+    baseline.fechar()
+
+    with pymupdf.open(output) as pdf, pymupdf.open(baseline_output) as baseline_pdf:
+        page = pdf[0]
+        baseline_page = baseline_pdf[0]
+        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(1, 1), alpha=False)
+        try:
+            rendered = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            for point in ((2, 2), (pixmap.width - 3, 2), (2, pixmap.height - 3)):
+                assert rendered.getpixel(point) == expected_rgb
+        finally:
+            rendered.close()
+
+        images = page.get_images(full=True)
+        baseline_images = baseline_page.get_images(full=True)
+        assert len(images) == len(infos)
+        assert len(baseline_images) == len(images)
+        for image, baseline_image, info, slot in zip(images, baseline_images, infos, template.slots):
+            assert pdf.extract_image(image[0])["image"] == baseline_pdf.extract_image(baseline_image[0])["image"]
+            image_rect = page.get_image_rects(image)[0]
+            baseline_rect = baseline_page.get_image_rects(baseline_image)[0]
+            assert tuple(image_rect) == pytest.approx(tuple(baseline_rect), abs=0.01)
+            bounds = _point_rect(slot.rect, page.rect.width, page.rect.height)
+            expected = fit_contain(Rect(bounds.x0, bounds.y0, bounds.width, bounds.height), info.width / info.height)
+            assert tuple(image_rect) == pytest.approx(
+                (expected.x, expected.y, expected.right, expected.bottom), abs=0.05,
+            )
+
+        fills = [drawing for drawing in page.get_drawings() if drawing.get("fill") == (0.0, 0.0, 0.0)]
+        assert len(fills) == (3 * len(infos) if shadow else 0)
+        if shadow:
+            assert sum(drawing["fill_opacity"] for drawing in fills) / len(infos) == pytest.approx(0.145)
+            assert sum(drawing["fill_opacity"] for drawing in fills) / len(infos) < 0.16
+        for drawing in fills:
+            assert any(drawing["fill_opacity"] == pytest.approx(opacity, abs=1e-6)
+                       for opacity in (0.075, 0.045, 0.025))
+            containing_slots = [
+                _point_rect(slot.rect, page.rect.width, page.rect.height)
+                for slot in template.slots
+                if (
+                    drawing["rect"].x0 >= _point_rect(slot.rect, page.rect.width, page.rect.height).x0 - 0.05
+                    and drawing["rect"].y0 >= _point_rect(slot.rect, page.rect.width, page.rect.height).y0 - 0.05
+                    and drawing["rect"].x1 <= _point_rect(slot.rect, page.rect.width, page.rect.height).x1 + 0.05
+                    and drawing["rect"].y1 <= _point_rect(slot.rect, page.rect.width, page.rect.height).y1 + 0.05
+                )
+            ]
+            assert containing_slots
+            assert not any(
+                _point_rect(other.rect, page.rect.width, page.rect.height).intersects(drawing["rect"])
+                for other in template.slots
+                if other.rect not in {
+                    slot.rect for slot in template.slots
+                    if _point_rect(slot.rect, page.rect.width, page.rect.height) in containing_slots
+                }
+            )
+
+
+@pytest.mark.parametrize(
     ("template_id", "sizes"),
     [
         ("single-portrait", ((200, 300),)),
@@ -243,6 +340,51 @@ def test_legacy_proof_caption_is_centered_on_its_photo_without_a_filled_band(tmp
         word_rect = pymupdf.Rect(*caption_words[0][:4])
         assert (word_rect.x0 + word_rect.x1) / 2 == pytest.approx(
             (image_rect.x0 + image_rect.x1) / 2, abs=0.75
+        )
+
+
+def test_legacy_card_shadow_is_vector_clipped_and_preserves_its_jpeg(tmp_path: Path, image_factory):
+    from provas import tema
+    from provas.documento import Documento, Tipografia
+
+    path = image_factory("legacy-shadow.jpg", size=(200, 300), color=(220, 40, 40))
+    info = _photo(path, 0)
+    cell = pymupdf.Rect(100, 80, 340, 420)
+    documents = []
+    for shadow in (False, True):
+        document = Documento(
+            "Ensaio", "", True, Tipografia(), None,
+            paleta=tema.paleta_paginas("preto"), sombra_fotos=shadow, modo="prova",
+        )
+        page = document.nova_pagina()
+        document.cartao(page, cell, path.read_bytes(), info.width / info.height, info.label, 20)
+        output = tmp_path / f"legacy-shadow-{shadow}.pdf"
+        document.salvar(str(output))
+        document.fechar()
+        documents.append(output)
+
+    with pymupdf.open(documents[0]) as plain_pdf, pymupdf.open(documents[1]) as shadow_pdf:
+        plain_page, shadow_page = plain_pdf[0], shadow_pdf[0]
+        plain_image = plain_page.get_images(full=True)[0]
+        shadow_image = shadow_page.get_images(full=True)[0]
+        assert plain_pdf.extract_image(plain_image[0])["image"] == shadow_pdf.extract_image(shadow_image[0])["image"]
+        assert tuple(plain_page.get_image_rects(plain_image)[0]) == pytest.approx(
+            tuple(shadow_page.get_image_rects(shadow_image)[0]), abs=0.01,
+        )
+        shadows = [drawing for drawing in shadow_page.get_drawings() if drawing.get("fill") == (0.0, 0.0, 0.0)]
+        assert len(shadows) == 3
+        safe_bounds = pymupdf.Rect(
+            cell.x0 + tema.RESPIRO_CARTAO,
+            cell.y0 + tema.RESPIRO_CARTAO,
+            cell.x1 - tema.RESPIRO_CARTAO,
+            cell.y1 - 20,
+        )
+        assert all(
+            drawing["rect"].x0 >= safe_bounds.x0 - 0.05
+            and drawing["rect"].y0 >= safe_bounds.y0 - 0.05
+            and drawing["rect"].x1 <= safe_bounds.x1 + 0.05
+            and drawing["rect"].y1 <= safe_bounds.y1 + 0.05
+            for drawing in shadows
         )
 
 
