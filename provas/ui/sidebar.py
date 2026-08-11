@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -29,6 +30,7 @@ class WorkflowSidebar(QFrame):
     crop_requested = Signal()
     cover_style_changed = Signal(str)
     cover_identity_changed = Signal(dict)
+    page_appearance_changed = Signal(str, bool)
     cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -108,6 +110,38 @@ class WorkflowSidebar(QFrame):
             lambda checked: checked and self.mode_changed.emit("fotolivro")
         )
         self.set_mode("prova", emit=False)
+
+        layout.addSpacing(24)
+        self.page_appearance_section_label = self._section_label("Aparência das páginas")
+        layout.addWidget(self.page_appearance_section_label)
+        layout.addSpacing(12)
+        page_background_label = QLabel("Fundo")
+        page_background_label.setObjectName("fieldLabel")
+        layout.addWidget(page_background_label)
+        layout.addSpacing(6)
+        self.page_background = QComboBox()
+        self.page_background.setAccessibleName("Fundo das páginas")
+        self.page_background.setAccessibleDescription(
+            "Escolha Branco, Cinza ou Preto para as páginas internas"
+        )
+        self.page_background.setMinimumHeight(36)
+        self.page_background.addItem("Branco", "branco")
+        self.page_background.addItem("Cinza", "cinza")
+        self.page_background.addItem("Preto", "preto")
+        self.page_background.currentIndexChanged.connect(self._emit_page_appearance)
+        layout.addWidget(self.page_background)
+        layout.addSpacing(8)
+        self.photo_shadow = QCheckBox("Sombra suave nas fotos")
+        self.photo_shadow.setAccessibleName("Sombra suave nas fotos")
+        self.photo_shadow.setAccessibleDescription(
+            "Adiciona uma sombra curta e discreta atrás das fotografias internas"
+        )
+        self.photo_shadow.setMinimumHeight(36)
+        self.photo_shadow.toggled.connect(self._emit_page_appearance)
+        layout.addWidget(self.photo_shadow)
+        self._page_appearance_ready = False
+        self._page_appearance_busy = False
+        self._update_page_appearance_controls()
 
         layout.addSpacing(24)
         self.cover_section_label = self._section_label("Capa")
@@ -231,6 +265,11 @@ class WorkflowSidebar(QFrame):
         self._update_cover_actions()
         self.cover_style_changed.emit(str(self.cover_style.currentData()))
 
+    def _emit_page_appearance(self, *_args: object) -> None:
+        self.page_appearance_changed.emit(
+            str(self.page_background.currentData()), self.photo_shadow.isChecked()
+        )
+
     def _identity_payload(self) -> dict[str, str]:
         return {
             "titulo": self.title_edit.text().strip(),
@@ -285,6 +324,27 @@ class WorkflowSidebar(QFrame):
         self.logo_name.setToolTip(self.logo_path)
         self.logo_remove_button.setEnabled(bool(self.logo_path))
 
+    def set_page_appearance(
+        self, background: str, shadow: bool, *, emit: bool = False
+    ) -> None:
+        index = self.page_background.findData(background)
+        if index < 0:
+            raise ValueError("Fundo das páginas inválido.")
+        blockers = (
+            self.page_background.blockSignals(True),
+            self.photo_shadow.blockSignals(True),
+        )
+        self.page_background.setCurrentIndex(index)
+        self.photo_shadow.setChecked(bool(shadow))
+        self.page_background.blockSignals(blockers[0])
+        self.photo_shadow.blockSignals(blockers[1])
+        if emit:
+            self._emit_page_appearance()
+
+    def set_page_appearance_ready(self, ready: bool) -> None:
+        self._page_appearance_ready = bool(ready)
+        self._update_page_appearance_controls()
+
     @property
     def mode(self) -> str:
         return "prova" if self.proof_radio.isChecked() else "fotolivro"
@@ -317,6 +377,7 @@ class WorkflowSidebar(QFrame):
             self.mode_changed.emit(mode)
 
     def set_busy(self, busy: bool, label: str = "") -> None:
+        self._page_appearance_busy = bool(busy)
         self.progress_panel.setVisible(busy)
         self.folder_button.setEnabled(not busy)
         self.analyze_button.setEnabled(not busy and bool(self.folder_label.toolTip()))
@@ -337,6 +398,7 @@ class WorkflowSidebar(QFrame):
         ):
             control.setEnabled(not busy)
         self.logo_remove_button.setEnabled(not busy and bool(self.logo_path))
+        self._update_page_appearance_controls()
         self.cancel_button.setEnabled(busy)
         if busy and label:
             self.progress_label.setText(label)
@@ -363,3 +425,8 @@ class WorkflowSidebar(QFrame):
             and not self.cancel_button.isEnabled()
             and self.cover_style.currentData() == "classica"
         )
+
+    def _update_page_appearance_controls(self) -> None:
+        available = self._page_appearance_ready and not self._page_appearance_busy
+        self.page_background.setEnabled(available)
+        self.photo_shadow.setEnabled(available)

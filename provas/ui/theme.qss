@@ -164,7 +164,7 @@ QPushButton:pressed {
     border-color: #D84060;
 }
 
-QPushButton:focus, QRadioButton:focus, QListWidget:focus {
+QPushButton:focus, QRadioButton:focus, QCheckBox:focus, QListWidget:focus {
     border: 2px solid #E04C6B;
 }
 
@@ -225,6 +225,34 @@ QRadioButton::indicator:checked {
 
 QRadioButton:disabled {
     color: #696A73;
+}
+
+QCheckBox {
+    min-height: 36px;
+    spacing: 8px;
+    color: #E5E5E9;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #62636D;
+    border-radius: 3px;
+    background: #202126;
+}
+
+QCheckBox::indicator:checked {
+    background: #D84060;
+    border-color: #D84060;
+}
+
+QCheckBox:disabled {
+    color: #696A73;
+}
+
+QCheckBox::indicator:disabled {
+    background: #1B1C20;
+    border-color: #292A30;
 }
 
 QProgressBar {

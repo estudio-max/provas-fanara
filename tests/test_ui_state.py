@@ -187,6 +187,57 @@ def test_sidebar_exposes_three_cover_styles_and_accessible_identity_fields(qapp)
     assert all(edit.minimumHeight() >= 36 for edit in sidebar.findChildren(QLineEdit))
 
 
+def test_sidebar_page_appearance_controls_are_native_accessible_and_keyboard_ready(qapp):
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+    events: list[tuple[str, bool]] = []
+    sidebar.page_appearance_changed.connect(lambda background, shadow: events.append((background, shadow)))
+
+    assert [sidebar.page_background.itemData(index) for index in range(sidebar.page_background.count())] == [
+        "branco", "cinza", "preto",
+    ]
+    assert [sidebar.page_background.itemText(index) for index in range(sidebar.page_background.count())] == [
+        "Branco", "Cinza", "Preto",
+    ]
+    assert sidebar.page_background.accessibleName() == "Fundo das páginas"
+    assert sidebar.photo_shadow.accessibleName() == "Sombra suave nas fotos"
+    assert sidebar.page_background.minimumHeight() >= 36
+    assert sidebar.photo_shadow.minimumHeight() >= 36
+    assert not sidebar.page_background.isEnabled()
+    assert not sidebar.photo_shadow.isEnabled()
+
+    sidebar.set_page_appearance_ready(True)
+    sidebar.page_background.setFocus()
+    QTest.keyClick(sidebar.page_background, Qt.Key.Key_End)
+    sidebar.photo_shadow.setFocus()
+    QTest.keyClick(sidebar.photo_shadow, Qt.Key.Key_Space)
+
+    assert sidebar.page_background.currentData() == "preto"
+    assert sidebar.photo_shadow.isChecked()
+    assert events == [("preto", False), ("preto", True)]
+
+
+def test_sidebar_page_appearance_api_blocks_restore_signals_and_obeys_busy_state(qapp):
+    from provas.ui.sidebar import WorkflowSidebar
+
+    sidebar = WorkflowSidebar()
+    events: list[tuple[str, bool]] = []
+    sidebar.page_appearance_changed.connect(lambda background, shadow: events.append((background, shadow)))
+
+    sidebar.set_page_appearance("preto", True, emit=False)
+
+    assert sidebar.page_background.currentData() == "preto"
+    assert sidebar.photo_shadow.isChecked()
+    assert events == []
+
+    sidebar.set_page_appearance_ready(True)
+    sidebar.set_busy(True, "Preparando prévia")
+
+    assert not sidebar.page_background.isEnabled()
+    assert not sidebar.photo_shadow.isEnabled()
+
+
 def test_classic_crop_action_requires_ready_classic_project(qapp):
     from provas.ui.sidebar import WorkflowSidebar
 
@@ -308,6 +359,69 @@ def test_cover_identity_change_preserves_pages_seed_and_manual_cover(
     assert window.project_state.config.titulo == "Ensaio Aurora"
     assert window.project_state.config.logo == "logo-inexistente.png"
     assert window.status_kind == "warning"
+
+
+def test_page_appearance_updates_only_config_and_requests_one_preview_for_a_change(
+    qapp, tmp_path: Path, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.select_folder(str(tmp_path))
+    window.apply_analysis_result(plan)
+    window.previews = (object(),)
+    before = window.project_state
+    preview_requests: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+
+    window.set_page_appearance("preto", True)
+    window.set_page_appearance("preto", True)
+
+    assert window.project_state is not None and before is not None
+    assert window.project_state.config.fundo_paginas == "preto"
+    assert window.project_state.config.sombra_fotos is True
+    assert window.project_state.plan == before.plan
+    assert window.project_state.config.semente == before.config.semente
+    assert window.project_state.config.cover_ids == before.config.cover_ids
+    assert window.project_state.config.foto_capa_id == before.config.foto_capa_id
+    assert window.project_state.config.capa_foco_x == before.config.capa_foco_x
+    assert window.project_state.config.capa_foco_y == before.config.capa_foco_y
+    assert window.project_state.config.capa_zoom == before.config.capa_zoom
+    assert window.project_state.config.capa_enquadramento == before.config.capa_enquadramento
+    assert window.project_state.photo_paths == before.photo_paths
+    assert window.previews == ()
+    assert preview_requests == [True]
+
+
+def test_open_project_restores_page_appearance_without_emitting_another_preview(
+    qapp, tmp_path: Path, plan, monkeypatch,
+):
+    from provas.projeto import ProjectState, save_project
+    from provas.ui import MainWindow
+
+    state = ProjectState(
+        Config(str(tmp_path), fundo_paginas="preto", sombra_fotos=True, semente=plan.seed),
+        plan,
+        tuple(photo_id for page in plan.pages for photo_id in page.photo_ids),
+    )
+    project = tmp_path / "aparencia.provas.json"
+    save_project(project, state)
+    window = MainWindow()
+    preview_requests: list[bool] = []
+    sidebar_events: list[tuple[str, bool]] = []
+    monkeypatch.setattr(window, "request_preview", lambda: preview_requests.append(True))
+    window.sidebar.page_appearance_changed.connect(
+        lambda background, shadow: sidebar_events.append((background, shadow))
+    )
+
+    window.open_project(str(project))
+
+    assert window.sidebar.page_background.currentData() == "preto"
+    assert window.sidebar.photo_shadow.isChecked()
+    assert window.sidebar.page_background.isEnabled()
+    assert window.sidebar.photo_shadow.isEnabled()
+    assert sidebar_events == []
+    assert preview_requests == [True]
 
 
 def test_unreadable_logo_is_a_non_blocking_portuguese_warning(
@@ -1092,6 +1206,78 @@ def test_page_cycle_defers_a_pending_cover_identity_until_the_queue_finishes(
     assert requested_previews == [True]
 
 
+def test_page_cycle_defers_page_appearance_until_the_queue_finishes(
+    qapp, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    window = MainWindow()
+    window.apply_analysis_result(plan)
+    previews = (object(),)
+    window.previews = previews
+    requested_previews: list[bool] = []
+    monkeypatch.setattr(window, "request_preview", lambda: requested_previews.append(True))
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    window.request_page_cycle(1)
+    window.set_page_appearance("cinza", True)
+
+    assert window.project_state is not None
+    assert window.project_state.config.fundo_paginas == "branco"
+    assert window.project_state.config.sombra_fotos is False
+    assert window.previews is previews
+    assert requested_previews == []
+
+    window._page_cycle_cancelled()
+
+    assert window.project_state.config.fundo_paginas == "cinza"
+    assert window.project_state.config.sombra_fotos is True
+    assert requested_previews == [True]
+
+
+def test_deferred_cover_identity_and_page_appearance_preserve_preview_scroll(
+    qapp, plan, monkeypatch,
+):
+    from provas.ui import MainWindow
+
+    many_pages = replace(
+        plan,
+        pages=tuple(
+            PagePlan(number, "single-landscape", (plan.pages[0].photo_ids[0],), "narrative")
+            for number in range(1, 15)
+        ),
+    )
+    window = MainWindow()
+    window.resize(840, 540)
+    window.show()
+    window.apply_analysis_result(many_pages)
+    window.apply_preview_ready(
+        tuple(Image.new("RGB", (420, 297), "#d6e5f2") for _ in many_pages.pages)
+    )
+    for _ in range(3):
+        qapp.processEvents()
+    scrollbar = window.preview_grid.scroll_area.verticalScrollBar()
+    assert scrollbar.maximum() > 19
+    scrollbar.setValue(19)
+    window.preview_grid.pending_scroll_position = 0
+    monkeypatch.setattr(window, "request_preview", lambda: None)
+
+    def start(page_number: int) -> None:
+        window._page_cycle_worker = type("Worker", (), {"page_number": page_number})()  # type: ignore[assignment]
+
+    monkeypatch.setattr(window, "_start_page_cycle_worker", start)
+    window.request_page_cycle(1)
+    window.set_cover_identity({"titulo": "Depois da fila"})
+    window.set_page_appearance("preto", True)
+    window._page_cycle_cancelled()
+
+    assert window.preview_grid.pending_scroll_position == 19
+    window.close()
+
+
 def test_page_cycle_blocks_choose_folder_shortcut_handler(qapp, plan, monkeypatch):
     from provas.ui import MainWindow
 
@@ -1365,7 +1551,13 @@ def test_sidebar_controls_remain_reachable_at_minimum_window_size(qapp):
 
     scroll = window.sidebar.scroll_area
     assert scroll.verticalScrollBar().maximum() > 0
-    for control in (window.sidebar.cover_style, window.sidebar.site_edit, window.sidebar.cover_button):
+    for control in (
+        window.sidebar.page_background,
+        window.sidebar.photo_shadow,
+        window.sidebar.cover_style,
+        window.sidebar.site_edit,
+        window.sidebar.cover_button,
+    ):
         scroll.ensureWidgetVisible(control)
         qapp.processEvents()
         top = control.mapTo(scroll.viewport(), control.rect().topLeft()).y()

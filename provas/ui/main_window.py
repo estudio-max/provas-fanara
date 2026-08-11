@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self._page_cycle_busy: set[int] = set()
         self._page_cycle_aspect_ratios: dict[str, float] = {}
         self._deferred_cover_identity: dict[str, str] | None = None
+        self._deferred_page_appearance: tuple[str, bool] | None = None
 
         self._build()
         self._connect()
@@ -169,6 +170,7 @@ class MainWindow(QMainWindow):
         self.sidebar.mode_changed.connect(self._mode_selected)
         self.sidebar.cover_style_changed.connect(self.set_cover_style)
         self.sidebar.cover_identity_changed.connect(self.set_cover_identity)
+        self.sidebar.page_appearance_changed.connect(self.set_page_appearance)
         self.sidebar.cover_requested.connect(self.open_cover_dialog)
         self.sidebar.crop_requested.connect(self.open_crop_dialog)
         self.sidebar.cancel_requested.connect(self.cancel_active_operation)
@@ -234,6 +236,10 @@ class MainWindow(QMainWindow):
         self.sidebar.set_mode(state.config.modo, emit=False)
         self.sidebar.set_cover_style(state.config.estilo_capa, emit=False)
         self.sidebar.set_cover_identity(state.config)
+        self.sidebar.set_page_appearance(
+            state.config.fundo_paginas, state.config.sombra_fotos, emit=False
+        )
+        self.sidebar.set_page_appearance_ready(True)
         self.preview_grid.show_empty("Carregando a prévia do projeto salvo…")
         self.diagnostics.set_plan(
             state.plan,
@@ -266,6 +272,12 @@ class MainWindow(QMainWindow):
         )
         self.sidebar.set_cover_style(self._draft_config.estilo_capa, emit=False)
         self.sidebar.set_cover_identity(self._draft_config)
+        self.sidebar.set_page_appearance(
+            self._draft_config.fundo_paginas,
+            self._draft_config.sombra_fotos,
+            emit=False,
+        )
+        self.sidebar.set_page_appearance_ready(False)
         self.project_state = None
         self.previews = ()
         self._page_cycle_aspect_ratios = {}
@@ -338,7 +350,56 @@ class MainWindow(QMainWindow):
         self._sync_actions()
         self.request_preview()
 
-    def set_cover_identity(self, identity: dict[str, str]) -> None:
+    def set_page_appearance(self, background: str, shadow: bool) -> None:
+        """Change only internal-page rendering without touching the editorial plan."""
+        normalized_background = str(background)
+        normalized_shadow = bool(shadow)
+        if normalized_background not in {"branco", "cinza", "preto"}:
+            raise ValueError("Fundo das páginas inválido.")
+        if self.project_state is None:
+            return
+        current = self.project_state.config
+        if (
+            current.fundo_paginas == normalized_background
+            and current.sombra_fotos == normalized_shadow
+        ):
+            return
+        if self._page_cycle_worker is not None or self._page_cycle_queue:
+            self._deferred_page_appearance = (normalized_background, normalized_shadow)
+            return
+        if self.is_busy:
+            return
+        self._apply_page_appearance(normalized_background, normalized_shadow)
+        self.request_preview()
+
+    def _apply_page_appearance(self, background: str, shadow: bool) -> None:
+        """Install a validated appearance config while retaining plan and scroll state."""
+        if self.project_state is None:
+            return
+        if self.previews:
+            self.preview_grid.pending_scroll_position = (
+                self.preview_grid.scroll_area.verticalScrollBar().value()
+            )
+        config = replace(
+            self.project_state.config,
+            fundo_paginas=background,
+            sombra_fotos=shadow,
+        )
+        self.project_state = replace(self.project_state, config=config)
+        if self._draft_config is not None:
+            self._draft_config = replace(
+                self._draft_config,
+                fundo_paginas=background,
+                sombra_fotos=shadow,
+            )
+        self.sidebar.set_page_appearance(background, shadow, emit=False)
+        self.previews = ()
+        self.set_status("Aparência das páginas atualizada. Preparando a prévia.", "idle")
+        self._sync_actions()
+
+    def set_cover_identity(
+        self, identity: dict[str, str], *, request_preview: bool = True
+    ) -> None:
         """Update debounced cover identity without regenerating internal pages."""
         values = {
             key: str(identity.get(key, "")).strip()
@@ -368,7 +429,8 @@ class MainWindow(QMainWindow):
         else:
             self.set_status("Identidade da capa atualizada. Preparando a prévia.", "idle")
         self._sync_actions()
-        self.request_preview()
+        if request_preview:
+            self.request_preview()
 
     @staticmethod
     def _logo_is_readable(path: str) -> bool:
@@ -473,6 +535,10 @@ class MainWindow(QMainWindow):
         }
         self.sidebar.set_cover_style(config.estilo_capa, emit=False)
         self.sidebar.set_cover_identity(config)
+        self.sidebar.set_page_appearance(
+            config.fundo_paginas, config.sombra_fotos, emit=False
+        )
+        self.sidebar.set_page_appearance_ready(True)
         self._analysis_failures = tuple(failures)
         self.sidebar.set_project_loaded(True)
         self.previews = ()
@@ -677,8 +743,16 @@ class MainWindow(QMainWindow):
         self.sidebar.set_busy(False)
         self._sync_actions()
         identity, self._deferred_cover_identity = self._deferred_cover_identity, None
-        if identity is not None and not self._closing:
-            self.set_cover_identity(identity)
+        appearance, self._deferred_page_appearance = self._deferred_page_appearance, None
+        if self._closing:
+            return
+        if identity is None and appearance is None:
+            return
+        if appearance is not None:
+            self._apply_page_appearance(*appearance)
+        if identity is not None:
+            self.set_cover_identity(identity, request_preview=False)
+        self.request_preview()
 
     def _forget_page_cycle_thread(self, thread: QThread, worker: PageCycleWorker) -> None:
         if self._page_cycle_thread is thread:
