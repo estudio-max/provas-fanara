@@ -16,6 +16,7 @@ NOME_SERIF = "fanSerif"
 NOME_SERIF_ITALICO = "fanSerifIt"
 NOME_SANS = "fanSans"
 NOME_SANS_MEDIO = "fanSansM"
+_PREFIXO_IDENTIFICAVEL = 18
 
 _PAPEIS = {
     NOME_SERIF: tema.SERIF,
@@ -147,6 +148,21 @@ class Tipografia:
         for caractere in texto_:
             pagina.insert_text((x, y), caractere, fontname=nome, fontsize=tamanho, color=cor)
             x += fonte_obj.text_length(caractere, tamanho) + entreletra
+
+
+def _encaixar_legenda_na_foto(
+    tipo: Tipografia, texto: str, largura: float, tamanho_base: float,
+) -> tuple[str, float, float]:
+    """Prefer smaller, centered type before truncating a photo filename."""
+    minimo = min(_PREFIXO_IDENTIFICAVEL, len(texto))
+    ultimo: tuple[str, float, float] | None = None
+    for tamanho, entreletra in ((tamanho_base, 0.25), (6.2, 0.20), (5.4, 0.10), (4.8, 0.0)):
+        rotulo = tipo.encaixar(texto, NOME_SANS_MEDIO, tamanho, largura, entreletra)
+        ultimo = (rotulo, tamanho, entreletra)
+        if len(rotulo.removesuffix("…")) >= minimo:
+            return ultimo
+    assert ultimo is not None
+    return ultimo
 
 
 # --- grade ----------------------------------------------------------------
@@ -299,15 +315,14 @@ class Documento:
                 continue
             caption_rect = _points(slot.caption, self.tamanho)
             font_size = 7.2 if caption_rect.width >= 150 else 6.2
-            label = self.tipo.encaixar(
-                asset.label, NOME_SANS_MEDIO, font_size,
-                max(1.0, image_rect.width - 8), 0.25,
+            label, font_size, tracking = _encaixar_legenda_na_foto(
+                self.tipo, asset.label, max(1.0, image_rect.width - 8), font_size,
             )
             baseline = min(caption_rect.y1 - 2.0, caption_rect.y0 + font_size + 2.0)
             center_x = (image_rect.x0 + image_rect.x1) / 2
             self.tipo.escrever(
                 page, center_x, baseline, label,
-                NOME_SANS_MEDIO, font_size, self.p.apagado, 0.25,
+                NOME_SANS_MEDIO, font_size, self.p.apagado, tracking,
                 "centro",
             )
         return page
@@ -378,9 +393,11 @@ class Documento:
         if not rotulo:
             return
         tamanho = 7.2 if largura > 150 else 6.2
-        nome = self.tipo.encaixar(rotulo, NOME_SANS_MEDIO, tamanho, foto.width - 8, 0.25)
+        nome, tamanho, tracking = _encaixar_legenda_na_foto(
+            self.tipo, rotulo, foto.width - 8, tamanho,
+        )
         self.tipo.escrever(pagina, centro_x, cartao.y1 - 6.5, nome,
-                           NOME_SANS_MEDIO, tamanho, self.p.apagado, 0.25, "centro")
+                           NOME_SANS_MEDIO, tamanho, self.p.apagado, tracking, "centro")
 
     # capa -----------------------------------------------------------------
     def capa(self, capa_jpeg: bytes, quantidade: int, chamada: str,

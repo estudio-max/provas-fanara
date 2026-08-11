@@ -269,10 +269,82 @@ def build_classic_cases(output: Path, *, dpi: int = 120) -> tuple[Path, ...]:
     return tuple(sheets)
 
 
+def build_page_cycle_case(output: Path, *, dpi: int = 120) -> Path:
+    """Capture the per-page cycle affordance in its normal, busy and unavailable states."""
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import QApplication
+
+    from provas.modelos import BookPlan, PagePlan
+    from provas.ui import MainWindow
+
+    output.mkdir(parents=True, exist_ok=True)
+    app = QApplication.instance() or QApplication([])
+    for font_name in (
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/segoeuil.ttf",
+        "C:/Windows/Fonts/seguisym.ttf",
+    ):
+        QFontDatabase.addApplicationFont(font_name)
+    app.setStyleSheet((Path(__file__).parents[1] / "provas" / "ui" / "theme.qss").read_text(encoding="utf-8"))
+    plan = BookPlan(
+        661, "prova", (),
+        (
+            PagePlan(1, "single-landscape", ("normal.jpg",), "opening"),
+            PagePlan(2, "pair-asymmetric-left", ("ocupada-a.jpg", "ocupada-b.jpg"), "sequence"),
+            PagePlan(3, "single-landscape", ("sem-alternativa.jpg",), "ending"),
+        ),
+    )
+    previews = tuple(
+        Image.new("RGB", (420, 297), color)
+        for color in ("#f1ede4", "#c8d8e7", "#e6d1c5", "#d7dfd3")
+    )
+    window = MainWindow()
+    window.resize(1093, 614)
+    window.show()
+    app.processEvents()
+    try:
+        window.select_folder(str(output))
+        window.apply_analysis_result(plan)
+        window.previews = previews
+        window.preview_grid.set_previews(plan, previews)
+        window.preview_grid.set_zoom(60)
+        window.preview_grid.set_page_alternatives({1, 2})
+        scrollbar = window.preview_grid.scroll_area.verticalScrollBar()
+        scrollbar.setValue(min(24, scrollbar.maximum()))
+        before_scroll = scrollbar.value()
+        window.preview_grid.set_page_busy(2, True)
+        app.processEvents()
+        assert scrollbar.value() == before_scroll
+        assert window.preview_grid.card(1).reload_button is not None
+        assert window.preview_grid.card(1).reload_button.isEnabled()
+        assert window.preview_grid.card(2).reload_button is not None
+        assert not window.preview_grid.card(2).reload_button.isEnabled()
+        assert window.preview_grid.card(2).reload_button.text() == "…"
+        assert window.preview_grid.card(3).reload_button is not None
+        assert not window.preview_grid.card(3).reload_button.isEnabled()
+        target = output / "ui-1093x614-125.png"
+        screenshot = window.grab()
+        if screenshot.size().width() != 1093 or screenshot.size().height() != 614:
+            screenshot = screenshot.scaled(1093, 614)
+        assert screenshot.size().width() == 1093 and screenshot.size().height() == 614
+        assert screenshot.save(str(target))
+        render_pdf_contact = output / "ciclo-paginas-ui-capture.pdf"
+        document = pymupdf.open()
+        document.new_page(width=1093, height=614)
+        document.save(render_pdf_contact)
+        document.close()
+        render_pdf(render_pdf_contact, dpi=dpi, contact_sheet=output / "ciclo-paginas-contact-sheet.png")
+        return target
+    finally:
+        window.close()
+        for image in previews:
+            image.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", type=Path, help="diretório que contém os PDFs E2E")
-    parser.add_argument("--case", choices=("curvas-editoriais", "capa-classica"))
+    parser.add_argument("--case", choices=("curvas-editoriais", "capa-classica", "ciclo-paginas"))
     parser.add_argument("--dpi", type=int, default=120)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -289,6 +361,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--output é obrigatório para o caso capa-classica")
         sheets = build_classic_cases(destination, dpi=args.dpi)
         print(f"Matriz capa-classica: {len(sheets)} folhas -> {destination}")
+        return 0
+    if args.case == "ciclo-paginas":
+        destination = args.output or args.root
+        if destination is None:
+            parser.error("--output é obrigatório para o caso ciclo-paginas")
+        screenshot = build_page_cycle_case(destination, dpi=args.dpi)
+        print(f"QA ciclo-paginas: 1093x614 a 125% -> {screenshot}")
         return 0
     if args.root is None:
         parser.error("informe o diretório que contém os PDFs E2E")

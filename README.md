@@ -32,6 +32,12 @@ de PDF A4 paisagem. No pacote distribuído, extraia a pasta inteira e abra
 6. Use **Salvar projeto** para guardar o plano ou **Exportar PDF** para a
    entrega final.
 
+Cada página interna com alternativa mostra o botão `↻`. Ele mantém as mesmas
+fotos, mas pode permutar suas posições em uma diagramação compatível; os
+cliques percorrem o ciclo determinístico e voltam ao início. A escolha fica
+salva no projeto e vale tanto para a prévia quanto para o PDF. Capa e páginas
+sem alternativa não exibem esse controle.
+
 O motor narrativo avalia orientação, nitidez, exposição, densidade e
 similaridade. Com uma semente reproduzível, monta abertura, detalhes e respiros
 e limita páginas densas a no máximo duas consecutivas.

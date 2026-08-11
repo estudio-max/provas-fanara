@@ -180,6 +180,39 @@ def test_proof_caption_is_centered_on_each_physical_photo(tmp_path: Path, image_
             )
 
 
+def test_proof_caption_keeps_an_identifiable_filename_prefix_inside_a_narrow_photo(
+    tmp_path: Path, image_factory,
+):
+    """Adaptive typography precedes ellipsis when a portrait sits in a wide slot."""
+    from provas.documento import Documento, Tipografia
+
+    target = image_factory("FANARA_0003_PLANO_AMPLO.jpg", size=(200, 300), color=(220, 40, 40))
+    companions = tuple(
+        image_factory(f"companheira-{index}.jpg", size=(200, 300), color=(40, 80 + index * 20, 220))
+        for index in range(3)
+    )
+    infos = tuple(_photo(path, index) for index, path in enumerate((companions[0], target, *companions[1:])))
+    page_plan = PagePlan(1, "quad-left-feature", tuple(info.id for info in infos), "opening")
+    template = next(item for item in catalog() if item.id == page_plan.template_id).resolve("prova")
+    doc = Documento("Ensaio", "", True, Tipografia(), None, modo="prova")
+    doc.render_page(page_plan, template, {info.id: info for info in infos})
+    output = tmp_path / "caption-prefix.pdf"
+    doc.salvar(str(output))
+
+    with pymupdf.open(output) as pdf:
+        page = pdf[0]
+        image_rect = page.get_image_rects(page.get_images(full=True)[1])[0]
+        caption = _point_rect(template.slots[1].caption, page.rect.width, page.rect.height)
+        words = [word for word in page.get_text("words") if pymupdf.Rect(word[:4]).intersects(caption)]
+        assert "FANARA_0003_PLANO_" in page.get_text()
+        assert words
+        word_rect = pymupdf.Rect(*words[0][:4])
+        assert caption.contains(word_rect)
+        assert (word_rect.x0 + word_rect.x1) / 2 == pytest.approx(
+            (image_rect.x0 + image_rect.x1) / 2, abs=0.75
+        )
+
+
 def test_legacy_proof_caption_is_centered_on_its_photo_without_a_filled_band(tmp_path: Path, image_factory):
     from provas.documento import Documento, Tipografia
 

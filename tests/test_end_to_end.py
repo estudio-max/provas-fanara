@@ -16,8 +16,10 @@ import pytest
 from PIL import Image, ImageDraw
 
 from provas import motor
+from provas.ciclo_paginas import alternativas_da_pagina, ciclar_pagina
 from provas.compositor import compose, validate_plan
-from provas.modelos import BookPlan
+from provas.modelos import BookPlan, PagePlan
+from provas.projeto import ProjectState, load_project, save_project
 from provas.templates import catalog
 
 
@@ -915,6 +917,168 @@ def test_mode_guard_rejects_proof_without_watermark():
         proof_without_watermark.close()
 
 
+def _make_page_cycle_album(root: Path, orientation: str) -> tuple[BookPlan, tuple[str, ...]]:
+    """Build a ten-page album with one, two and four-photo pages to cycle."""
+    session = root / f"ciclo-{orientation}"
+    session.mkdir()
+    paths: list[str] = []
+    for index in range(22):
+        if orientation == "portrait":
+            current = "portrait"
+        elif orientation == "landscape":
+            current = "landscape"
+        else:
+            current = "portrait" if index % 2 == 0 else "landscape"
+        path = session / f"CICLO_{orientation}_{index:02d}.jpg"
+        _synthetic_image(path, index + 60, current, detail=index % 2 == 0)
+        paths.append(str(path))
+
+    def page(number: int, template_id: str, count: int, role: str) -> PagePlan:
+        start = sum((1, 2, 4, 1, 2, 4, 1, 2, 4)[: number - 1])
+        photo_ids = tuple(paths[start : start + count])
+        # Deliberately begin multi-photo pages in a non-optimal order so the
+        # E2E contract proves that positions, not only templates, can change.
+        if count in (2, 4):
+            photo_ids = tuple(reversed(photo_ids))
+        return PagePlan(number, template_id, photo_ids, role)
+
+    if orientation == "portrait":
+        templates = (
+            ("single-portrait", 1), ("pair-asymmetric-left", 2), ("quad-left-feature", 4),
+            ("single-full", 1), ("pair-portraits", 2), ("quad-grid", 4),
+            ("single-portrait", 1), ("pair-breathing", 2), ("quad-columns", 4), ("single-full", 1),
+        )
+    elif orientation == "landscape":
+        templates = (
+            ("single-landscape", 1), ("pair-asymmetric-left", 2), ("quad-top-feature", 4),
+            ("single-full", 1), ("pair-landscapes", 2), ("quad-grid", 4),
+            ("single-landscape", 1), ("pair-breathing", 2), ("quad-top-feature", 4), ("single-full", 1),
+        )
+    else:
+        templates = (
+            ("single-full", 1), ("pair-asymmetric-left", 2), ("quad-left-feature", 4),
+            ("single-full", 1), ("pair-breathing", 2), ("quad-grid", 4),
+            ("single-full", 1), ("pair-asymmetric-right", 2), ("quad-columns", 4), ("single-full", 1),
+        )
+    roles = ("opening", "sequence", "narrative", "sequence", "narrative", "sequence", "narrative", "sequence", "ending", "ending")
+    pages = tuple(page(number, template_id, count, roles[number - 1]) for number, (template_id, count) in enumerate(templates, start=1))
+    return BookPlan(661, "fotolivro", (paths[0],), pages), tuple(paths)
+
+
+@pytest.mark.parametrize("orientation", ("portrait", "landscape", "mixed"))
+@pytest.mark.parametrize("mode", ("prova", "fotolivro"))
+def test_page_cycle_e2e_keeps_cover_persists_three_of_ten_and_matches_pdf(
+    tmp_path: Path, monkeypatch, orientation: str, mode: str,
+):
+    """The complete per-page flow only reads each selected internal page."""
+    plan, photo_paths = _make_page_cycle_album(tmp_path, orientation)
+    plan = BookPlan(plan.seed, mode, plan.cover_photo_ids, plan.pages)
+    config = motor.Config(
+        str(Path(photo_paths[0]).parent), saida=str(tmp_path / f"ciclo-{orientation}-{mode}.pdf"),
+        modo=mode, estilo_capa="classica", foto_capa_id=plan.cover_photo_ids[0],
+        qualidade="leve", marca_dagua=mode == "prova", mostrar_codigos=mode == "prova",
+    )
+    original_cover = plan.cover_photo_ids
+    original_pages = plan.pages
+    selected = (1, 2, 3)
+    ratios = {}
+    for photo_id in photo_paths:
+        with Image.open(photo_id) as image:
+            ratios[photo_id] = 2 / 3 if image.height > image.width else 3 / 2
+    try:
+        for number in selected:
+            alternatives = alternativas_da_pagina(plan, number, ratios)
+            assert len(alternatives) >= 2
+            assert all(set(candidate.photo_ids) == set(plan.pages[number - 1].photo_ids) for candidate in alternatives)
+            assert any(candidate != plan.pages[number - 1] for candidate in alternatives)
+            current = ciclar_pagina(plan, number, ratios)
+            seen = [current.pages[number - 1]]
+            for _ in range(len(alternatives) - 1):
+                current = ciclar_pagina(current, number, ratios)
+                seen.append(current.pages[number - 1])
+            assert len(seen) == len(set(seen))
+            assert set(seen) == set(alternatives)
+            current = ciclar_pagina(current, number, ratios)
+            assert current.pages[number - 1] == seen[0]
+
+        opened: list[str] = []
+        original_open = motor._open_photo
+
+        def tracked_open(photo_id: str):
+            opened.append(photo_id)
+            return original_open(photo_id)
+
+        monkeypatch.setattr(motor, "_open_photo", tracked_open)
+        results = {}
+        for number in selected:
+            result = motor.ciclar_preview_pagina(config, plan, number, 420)
+            results[number] = result
+            plan = result.plan
+        assert set(opened) == set().union(*(set(original_pages[number - 1].photo_ids) for number in selected))
+        assert all(path not in opened for page in original_pages[3:] for path in page.photo_ids)
+        assert plan.cover_photo_ids == original_cover
+        assert all(plan.pages[number - 1] != original_pages[number - 1] for number in selected)
+        assert plan.pages[3:] == original_pages[3:]
+
+        project = tmp_path / "ciclo.provas.json"
+        save_project(project, ProjectState(config, plan, photo_paths))
+        assert load_project(project).plan == plan
+
+        monkeypatch.setattr(motor, "_open_photo", original_open)
+        motor.exportar(config, plan)
+        with pymupdf.open(config.saida) as pdf:
+            assert pdf.page_count == 11
+            for number, result in results.items():
+                rendered = _render_at_width(pdf[number], 420)
+                try:
+                    assert rendered.tobytes() == result.thumbnail.tobytes()
+                finally:
+                    rendered.close()
+            assert pdf[0].get_images(full=True), "a capa deve continuar renderizada"
+            for page in pdf[1:]:
+                text = page.get_text()
+                assert bool(text.strip()) is (mode == "prova")
+    finally:
+        for result in locals().get("results", {}).values():
+            result.thumbnail.close()
+
+
+def test_page_cycle_e2e_is_stable_across_python_hash_seeds():
+    """The cycle order is reproducible even when interpreter hash randomization changes."""
+    script = """
+import json
+from provas.ciclo_paginas import alternativas_da_pagina
+from provas.modelos import BookPlan, PagePlan
+plan = BookPlan(661, 'fotolivro', (), (PagePlan(1, 'pair-asymmetric-left', ('v1', 'v2'), 'opening'),))
+print(json.dumps([(page.template_id, page.photo_ids) for page in alternativas_da_pagina(plan, 1, {'v1': 2/3, 'v2': 3/4})]))
+"""
+    outputs = []
+    for seed in ("1", "2"):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script], cwd=ROOT, env=environment,
+            capture_output=True, text=True, check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        outputs.append(completed.stdout)
+    assert outputs[0] == outputs[1]
+
+
+def test_page_cycle_e2e_reassigns_photos_to_the_best_compatible_positions():
+    """An asymmetric spread changes photo positions without changing its photo set."""
+    plan = BookPlan(
+        661, "fotolivro", (),
+        (PagePlan(1, "pair-asymmetric-left", ("narrow", "wide"), "opening"),),
+    )
+
+    alternatives = alternativas_da_pagina(plan, 1, {"narrow": 0.25, "wide": 0.80})
+
+    assert alternatives
+    assert all(set(candidate.photo_ids) == {"narrow", "wide"} for candidate in alternatives)
+    assert any(candidate.photo_ids == ("wide", "narrow") for candidate in alternatives)
+
+
 def test_packaged_zip_contains_verifiable_source_manifest(built_package: Path):
     from empacotar import commit_atual, fingerprint_fontes
 
@@ -987,6 +1151,26 @@ def test_visual_qa_classic_case_builds_required_matrix(tmp_path: Path):
     assert len(tuple(tmp_path.glob("*-contact-sheet.png"))) == 6
     assert (tmp_path / "capa-classica-overview.png").is_file()
     assert all(path.stat().st_size > 0 for path in tmp_path.glob("*.png"))
+
+
+def test_visual_qa_page_cycle_captures_normal_busy_and_unavailable_controls(tmp_path: Path):
+    environment = os.environ.copy()
+    environment["QT_QPA_PLATFORM"] = "offscreen"
+    environment["QT_SCALE_FACTOR"] = "1.25"
+    completed = subprocess.run(
+        [
+            sys.executable, str(ROOT / "tests" / "visual_qa.py"),
+            "--case", "ciclo-paginas", "--dpi", "120", "--output", str(tmp_path),
+        ],
+        cwd=ROOT, env=environment, capture_output=True, text=True, timeout=120, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    screenshot = tmp_path / "ui-1093x614-125.png"
+    assert screenshot.is_file()
+    with Image.open(screenshot) as captured:
+        assert captured.size == (1093, 614)
+    assert (tmp_path / "ciclo-paginas-contact-sheet.png").is_file()
 
 
 def test_visual_qa_synthetic_portrait_has_injectable_face_box(tmp_path: Path):
