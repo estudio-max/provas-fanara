@@ -171,6 +171,37 @@ certificado de desenvolvedor.
 
 Depois de enviar, `dist/` pode ser apagada; `empacotar.py` refaz quando precisar.
 
+## Microsoft Store (MSIX)
+
+```bash
+python empacotar_msix.py
+```
+
+Reaproveita o `dist/Provas/` que o `empacotar.py` produz e o embrulha em
+`dist/Provas-1.0.0.0-x64.msix` (~41 MB): manifesto, os três logotipos de bloco
+que a Store cobra e o `resources.pri`. O executável é o mesmo — o MSIX é só o
+invólucro que o Windows sabe instalar, atualizar e desinstalar sozinho.
+
+Antes de enviar, troque no alto do `empacotar_msix.py` os três valores que o
+Partner Center mostra em **Identidade do produto**, depois de você reservar o
+nome do app: `IDENTIDADE`, `PUBLICADOR` e `NOME_PUBLICADOR`. Se não baterem
+exatamente, o envio é recusado. O último número da versão tem de ser `0`.
+
+O pacote **não precisa de assinatura**: a Microsoft assina no envio. É por isso
+que a versão da Store não mostra o "O Windows protegeu o computador" que o zip
+mostra — o certificado que faltava vem do próprio canal.
+
+Para experimentar antes de enviar, ligue o Modo de Desenvolvedor (Configurações
+→ Sistema → Para desenvolvedores) e registre a pasta montada:
+
+```powershell
+Add-AppxPackage -Register build\msix\AppxManifest.xml
+```
+
+**As preferências mudam de lugar.** A pasta de instalação de um app da Store é
+somente leitura; quando o `config.json` não pode ser gravado ao lado do
+executável, ele vai para `%LOCALAPPDATA%\Provas`. No zip nada muda.
+
 ## Estrutura
 
 ```

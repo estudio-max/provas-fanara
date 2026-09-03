@@ -16,13 +16,26 @@ from . import motor, tema
 
 TITULO = "Provas"
 
+def _gravavel(pasta: str) -> bool:
+    """Grava um arquivo de teste. No Windows o os.access mente sobre pastas."""
+    teste = os.path.join(pasta, ".provas-escrita")
+    try:
+        with open(teste, "w"):
+            pass
+        os.remove(teste)
+        return True
+    except OSError:
+        return False
+
+
 def _pasta_gravavel() -> str:
     """Onde as preferências podem ser gravadas.
 
     Empacotado, o código roda de uma pasta temporária que o sistema apaga. No
     Windows as preferências ficam junto do executável; no macOS não podem ficar,
     porque ali é o interior do .app — vão para Application Support, como manda o
-    sistema.
+    sistema. Instalado pela Store (MSIX) ou em Arquivos de Programas, a pasta do
+    executável também é somente leitura: aí vão para LOCALAPPDATA.
     """
     if not getattr(sys, "frozen", False):
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +46,15 @@ def _pasta_gravavel() -> str:
             return pasta
         except OSError:
             return os.path.expanduser("~")
-    return os.path.dirname(sys.executable)
+    pasta = os.path.dirname(sys.executable)
+    if _gravavel(pasta):
+        return pasta
+    destino = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "Provas")
+    try:
+        os.makedirs(destino, exist_ok=True)
+        return destino
+    except OSError:
+        return os.path.expanduser("~")
 
 
 def _pasta_recursos() -> str:
