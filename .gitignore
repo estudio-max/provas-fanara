@@ -11,3 +11,6 @@ tmp/
 .worktrees/
 *.pdf
 *.fotolivro.json
+
+# Instaladores publicados no site: pesados e reconstruíveis por empacotar_msi.py
+site/downloads/

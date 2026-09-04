@@ -1,0 +1,64 @@
+PRIVACY POLICY — Fanara - Fotolivro
+
+Effective date: September 4, 2026
+Developer / Publisher: Estúdio Fanara
+Contact: estudio@fanara.com.br
+
+Fanara - Fotolivro is a free Windows desktop application that helps
+photographers assemble PDF photo proofs and photo books from a folder of
+images on their own computer. This policy explains how the app handles data.
+
+SUMMARY
+
+Fanara - Fotolivro does not collect, store, transmit, or share any personal
+data. The app makes no network connection: it never sends anything to
+Estúdio Fanara, to Microsoft, or to any third party. Everything the app does
+happens entirely on your device.
+
+WHAT THE APP PROCESSES
+
+- Photographs you choose. You select a folder on your own computer, and the
+  app reads the image files in it (including embedded previews from RAW
+  files) to build a PDF. This processing happens only in memory, only while
+  the app is open.
+- Output files. The PDF, and, if you choose to save one, a project file, are
+  written only to a location you pick yourself through the standard Windows
+  save dialog. Nothing is uploaded anywhere.
+- On-device face detection. To help frame the classic cover style, the app
+  can locate faces within a photo using local image analysis. This produces
+  temporary coordinates used only to compute a crop; it does not identify
+  who is in the photo, does not create a face template or biometric profile,
+  and is never stored or transmitted.
+
+WHAT THE APP DOES NOT DO
+
+- No account, sign-in, or registration of any kind.
+- No internet connection, analytics, telemetry, crash reporting, or
+  advertising.
+- No access to camera, microphone, or location.
+- No cookies (the app is not a website).
+- No data is sold, shared, or disclosed to any third party, because none is
+  collected in the first place.
+
+CHILDREN
+
+The app is a professional photo-layout tool, not directed at children, and
+does not knowingly collect data from anyone — including children — because
+it does not collect data from any user, of any age.
+
+WINDOWS AND THE MICROSOFT STORE
+
+Downloading, installing, and updating the app through the Microsoft Store is
+subject to Microsoft's own privacy practices for Windows and the Store,
+which are outside this app's control. See Microsoft's privacy statement at
+https://privacy.microsoft.com.
+
+CHANGES TO THIS POLICY
+
+If this policy changes, the updated text will be published with the app's
+next Microsoft Store update. Continued use of the app after an update
+constitutes acceptance of the revised policy.
+
+CONTACT
+
+Questions about this policy or the app can be sent to estudio@fanara.com.br.

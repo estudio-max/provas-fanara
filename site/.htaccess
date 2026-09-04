@@ -1,0 +1,6 @@
+# Todo o tráfego em https. A validação do certificado (Let's Encrypt) fica de
+# fora: o desafio ACME precisa responder em http durante a renovação.
+RewriteEngine On
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
