@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import io
+from collections.abc import Mapping
 
 import pymupdf
+from PIL import Image
 
-from . import tema
+from . import imagens, tema
+from .modelos import PagePlan, PhotoInfo, Rect, Template
+from .templates import fit_contain
 
 NOME_SERIF = "fanSerif"
 NOME_SERIF_ITALICO = "fanSerifIt"
 NOME_SANS = "fanSans"
 NOME_SANS_MEDIO = "fanSansM"
+_PREFIXO_IDENTIFICAVEL = 18
 
 _PAPEIS = {
     NOME_SERIF: tema.SERIF,
@@ -18,6 +24,61 @@ _PAPEIS = {
     NOME_SANS: tema.SANS,
     NOME_SANS_MEDIO: tema.SANS_MEDIO,
 }
+
+
+@dataclass(frozen=True)
+class RenderAsset:
+    """A decoded photograph ready to be embedded without further geometry changes."""
+
+    id: str
+    label: str
+    jpeg: bytes
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("Render asset dimensions must be positive")
+
+    @property
+    def ratio(self) -> float:
+        return self.width / self.height
+
+
+def _jpeg(image: Image.Image, quality: int = 90) -> bytes:
+    buffer = io.BytesIO()
+    image.convert("RGB").save(
+        buffer, format="JPEG", quality=quality, optimize=True,
+        progressive=False, subsampling=1,
+    )
+    return buffer.getvalue()
+
+
+def _render_asset(photo_id: str, source: object) -> RenderAsset:
+    """Accept pipeline assets and useful public input forms for direct rendering."""
+    if isinstance(source, RenderAsset):
+        return source
+    if isinstance(source, PhotoInfo):
+        foto = imagens.Foto(source.path, source.label)
+        image = imagens.abrir(foto)
+        try:
+            return RenderAsset(source.id, source.label, _jpeg(image), image.width, image.height)
+        finally:
+            image.close()
+    if isinstance(source, Image.Image):
+        return RenderAsset(photo_id, photo_id, _jpeg(source), source.width, source.height)
+    if isinstance(source, (bytes, bytearray)):
+        data = bytes(source)
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            label = photo_id
+        return RenderAsset(photo_id, label, data, width, height)
+    raise TypeError(f"Unsupported render asset for {photo_id!r}: {type(source).__name__}")
+
+
+def _points(rect: Rect, page_size: tuple[float, float]) -> pymupdf.Rect:
+    width, height = page_size
+    return pymupdf.Rect(rect.x * width, rect.y * height, rect.right * width, rect.bottom * height)
 
 
 class Tipografia:
@@ -87,6 +148,21 @@ class Tipografia:
         for caractere in texto_:
             pagina.insert_text((x, y), caractere, fontname=nome, fontsize=tamanho, color=cor)
             x += fonte_obj.text_length(caractere, tamanho) + entreletra
+
+
+def _encaixar_legenda_na_foto(
+    tipo: Tipografia, texto: str, largura: float, tamanho_base: float,
+) -> tuple[str, float, float]:
+    """Prefer smaller, centered type before truncating a photo filename."""
+    minimo = min(_PREFIXO_IDENTIFICAVEL, len(texto))
+    ultimo: tuple[str, float, float] | None = None
+    for tamanho, entreletra in ((tamanho_base, 0.25), (6.2, 0.20), (5.4, 0.10), (4.8, 0.0)):
+        rotulo = tipo.encaixar(texto, NOME_SANS_MEDIO, tamanho, largura, entreletra)
+        ultimo = (rotulo, tamanho, entreletra)
+        if len(rotulo.removesuffix("…")) >= minimo:
+            return ultimo
+    assert ultimo is not None
+    return ultimo
 
 
 # --- grade ----------------------------------------------------------------
@@ -177,26 +253,101 @@ class Documento:
     def __init__(self, titulo: str, subtitulo: str, paisagem: bool, tipografia: Tipografia,
                  logo: bytes | None, logo_proporcao: float = 1200 / 630,
                  rodape: str = "", nota_capa: str = "", estudio: str = "",
-                 site: str = "", paleta: tema.Paleta | None = None) -> None:
+                 site: str = "", paleta: tema.Paleta | None = None,
+                 modo: str = "prova", paleta_capa: tema.Paleta | None = None,
+                 sombra_fotos: bool = False) -> None:
+        if modo not in {"prova", "fotolivro"}:
+            raise ValueError(f"Unsupported mode: {modo}")
         self.pdf = pymupdf.open()
         self.rodape = rodape
         self.nota_capa = nota_capa
         self.estudio = estudio
         self.site = site
         self.p = paleta or tema.paleta()
+        self.p_capa = paleta_capa or self.p
+        self.sombra_fotos = bool(sombra_fotos)
         self.titulo = titulo
         self.subtitulo = subtitulo
         self.paisagem = paisagem
         self.tipo = tipografia
         self.logo = logo
         self.logo_proporcao = logo_proporcao
+        self.modo = modo
         self.tamanho = tema.A4_PAISAGEM if paisagem else tema.A4
+
+    @staticmethod
+    def _sombra_foto(
+        page: pymupdf.Page,
+        image_rect: pymupdf.Rect,
+        slot_bounds: pymupdf.Rect,
+    ) -> None:
+        """Draw a clipped vector shadow behind one physical photograph."""
+        for offset, expansion, opacity in ((1.5, 1.5, 0.075), (3.0, 2.0, 0.045), (5.0, 3.0, 0.025)):
+            shadow = pymupdf.Rect(
+                image_rect.x0 - expansion + offset,
+                image_rect.y0 - expansion + offset,
+                image_rect.x1 + expansion + offset,
+                image_rect.y1 + expansion + offset,
+            ) & slot_bounds
+            if not shadow.is_empty:
+                page.draw_rect(shadow, color=None, fill=(0, 0, 0), fill_opacity=opacity)
 
     def nova_pagina(self) -> pymupdf.Page:
         pagina = self.pdf.new_page(width=self.tamanho[0], height=self.tamanho[1])
         pagina.draw_rect(pymupdf.Rect(0, 0, *self.tamanho), color=None, fill=self.p.fundo)
         self.tipo.registrar(pagina)
         return pagina
+
+    def render_page(
+        self,
+        page_plan: PagePlan,
+        template: Template,
+        assets: Mapping[str, object],
+    ) -> pymupdf.Page:
+        """Render one editorial page from normalized slots, always containing photos."""
+        if not self.paisagem:
+            raise ValueError("Editorial pages require A4 landscape orientation")
+        if len(template.slots) != len(page_plan.photo_ids):
+            raise ValueError(
+                f"Template {template.id} expects {len(template.slots)} photos, "
+                f"got {len(page_plan.photo_ids)}"
+            )
+        missing = [photo_id for photo_id in page_plan.photo_ids if photo_id not in assets]
+        if missing:
+            raise ValueError(f"Missing render assets: {', '.join(missing)}")
+
+        # Callers normally pass a resolved template. Accepting catalog templates
+        # here keeps the public method safe without shrinking an already-resolved
+        # proof slot a second time.
+        has_captions = any(slot.caption.width and slot.caption.height for slot in template.slots)
+        resolved = template.resolve(self.modo) if self.modo == "fotolivro" or not has_captions else template
+        page = self.nova_pagina()
+        for photo_id, slot in zip(page_plan.photo_ids, resolved.slots):
+            asset = _render_asset(photo_id, assets[photo_id])
+            slot_points = _points(slot.rect, self.tamanho)
+            physical_bounds = Rect(slot_points.x0, slot_points.y0, slot_points.width, slot_points.height)
+            contained = fit_contain(physical_bounds, asset.ratio)
+            image_rect = pymupdf.Rect(contained.x, contained.y, contained.right, contained.bottom)
+            if self.sombra_fotos:
+                self._sombra_foto(page, image_rect, slot_points)
+            page.insert_image(image_rect, stream=asset.jpeg, keep_proportion=True)
+            page.draw_rect(image_rect, color=self.p.moldura, width=0.45)
+
+            if self.modo != "prova" or not slot.caption.width or not slot.caption.height:
+                continue
+            caption_rect = _points(slot.caption, self.tamanho)
+            font_size = 7.2 if caption_rect.width >= 150 else 6.2
+            label, font_size, tracking = _encaixar_legenda_na_foto(
+                self.tipo, asset.label, max(1.0, image_rect.width - 8), font_size,
+            )
+            baseline = min(caption_rect.y1 - 2.0, caption_rect.y0 + font_size + 2.0)
+            center_x = (image_rect.x0 + image_rect.x1) / 2
+            self.tipo.escrever(
+                page, center_x, baseline, label,
+                NOME_SANS_MEDIO, font_size, self.p.apagado, tracking,
+                "centro",
+            )
+        return page
 
     # cabeçalho e rodapé -------------------------------------------------
     def moldura(self, pagina: pymupdf.Page, numero: int, total: int) -> None:
@@ -258,33 +409,39 @@ class Documento:
 
         cartao = pymupdf.Rect(foto.x0 - tema.RESPIRO_CARTAO, foto.y0 - tema.RESPIRO_CARTAO,
                               foto.x1 + tema.RESPIRO_CARTAO, foto.y1 + altura_legenda)
-        pagina.draw_rect(cartao, color=None, fill=self.p.painel)
+        if self.sombra_fotos:
+            self._sombra_foto(pagina, foto, caixa)
         pagina.insert_image(foto, stream=jpeg, keep_proportion=True)
         pagina.draw_rect(foto, color=self.p.moldura, width=0.5)
 
         if not rotulo:
             return
         tamanho = 7.2 if largura > 150 else 6.2
-        nome = self.tipo.encaixar(rotulo, NOME_SANS_MEDIO, tamanho, cartao.width - 10, 1.1)
+        nome, tamanho, tracking = _encaixar_legenda_na_foto(
+            self.tipo, rotulo, foto.width - 8, tamanho,
+        )
         self.tipo.escrever(pagina, centro_x, cartao.y1 - 6.5, nome,
-                           NOME_SANS_MEDIO, tamanho, self.p.apagado, 1.1, "centro")
+                           NOME_SANS_MEDIO, tamanho, self.p.apagado, tracking, "centro")
 
     # capa -----------------------------------------------------------------
     def capa(self, capa_jpeg: bytes, quantidade: int, chamada: str,
-             ancora: float = 0.34) -> None:
-        largura, altura = self.tamanho
+             ancora: float = 0.34, identity_embedded: bool = False) -> None:
+        largura, altura = tema.A4_PAISAGEM if identity_embedded else self.tamanho
         pagina = self.pdf.new_page(width=largura, height=altura)
         self.tipo.registrar(pagina)
         pagina.insert_image(pymupdf.Rect(0, 0, largura, altura), stream=capa_jpeg,
                             keep_proportion=False)
+        if identity_embedded:
+            return
 
         centro = largura / 2
         base = altura * ancora
         # âncora baixa: a chamada acompanha o bloco em vez de ir para o pé da página
         compacto = ancora > 0.5
 
-        self.tipo.escrever(pagina, centro, base, "PROVAS DO ENSAIO", NOME_SANS_MEDIO, 8,
-                           self.p.acento, 3.4, "centro")
+        cover_label = "PROVAS DO ENSAIO" if self.modo == "prova" else "FOTOLIVRO"
+        self.tipo.escrever(pagina, centro, base, cover_label, NOME_SANS_MEDIO, 8,
+                           self.p_capa.acento, 3.4, "centro")
 
         if self.logo:
             largura_logo = min(150.0 if compacto else 180.0,
@@ -300,29 +457,37 @@ class Documento:
         tamanho_titulo = 22 if compacto else 25
         titulo = self.tipo.encaixar(self.titulo, NOME_SERIF, tamanho_titulo, largura - 90)
         self.tipo.escrever(pagina, centro, base, titulo, NOME_SERIF, tamanho_titulo,
-                           self.p.texto, 0.4, "centro")
+                           self.p_capa.texto, 0.4, "centro")
 
         pagina.draw_line((centro - 18, base + 18), (centro + 18, base + 18),
-                         color=self.p.acento, width=1.1)
+                         color=self.p_capa.acento, width=1.1)
 
         meta = " · ".join(p for p in (self.subtitulo, f"{quantidade} FOTOS") if p)
         self.tipo.escrever(pagina, centro, base + 38, meta.upper(), NOME_SANS, 7.5,
-                           self.p.apagado, 2.2, "centro")
+                           self.p_capa.apagado, 2.2, "centro")
 
         y_chamada = base + 64 if compacto else altura - 74
         self.tipo.escrever(pagina, centro, y_chamada, chamada, NOME_SERIF_ITALICO, 10.5,
-                           self.p.texto, 0, "centro")
+                           self.p_capa.texto, 0, "centro")
         self.tipo.escrever(pagina, centro, y_chamada + 18, self.nota_capa, NOME_SANS, 6.6,
-                           self.p.apagado, 2.0, "centro")
+                           self.p_capa.apagado, 2.0, "centro")
         self.tipo.escrever(pagina, centro, altura - 32, self.site, NOME_SANS_MEDIO, 6.6,
-                           self.p.acento, 1.6, "centro")
+                           self.p_capa.acento, 1.6, "centro")
 
     def salvar(self, caminho: str) -> None:
+        suffix = "provas" if self.modo == "prova" else "fotolivro"
         self.pdf.set_metadata({
-            "title": f"{self.titulo} — provas",
+            "title": f"{self.titulo} — {suffix}",
             "author": self.estudio or "",
-            "subject": "Seleção de fotos do ensaio",
+            "subject": "Seleção de fotos do ensaio" if self.modo == "prova" else "Fotolivro editorial",
             "creator": "Provas",
         })
-        self.pdf.save(caminho, deflate=True, garbage=3)
-        self.pdf.close()
+        try:
+            self.pdf.save(caminho, deflate=True, garbage=3)
+        finally:
+            self.pdf.close()
+
+    def fechar(self) -> None:
+        """Close an unsaved document after cancellation or a failed export."""
+        if not self.pdf.is_closed:
+            self.pdf.close()

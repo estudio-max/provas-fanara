@@ -1,56 +1,53 @@
-"""Gera o aplicativo do Provas para distribuir.
+"""Gera o pacote Windows do Fanara - Fotolivro.
 
     python empacotar.py
 
-No Windows produz `dist/Provas/` (pasta) e `dist/Provas-Windows.zip`.
-No macOS produz `dist/Provas.app` e `dist/Provas-macOS.zip`.
-
-O PyInstaller NÃO faz compilação cruzada: para ter a versão de Mac é preciso
-rodar este script num Mac, e o pacote sai para a arquitetura daquela máquina
-(Apple Silicon ou Intel).
-
-O modo pasta (em vez de arquivo único) no Windows foi escolhido de propósito:
-abre bem mais rápido, porque não descompacta ~80 MB a cada execução, e dispara
-muito menos alarme falso de antivírus.
-
-O logotipo NÃO vai embutido: quem receber aponta o próprio na janela.
+Produz `dist/Fanara - Fotolivro/` e `dist/Fanara - Fotolivro-Windows.zip`. Este empacotador é
+deliberadamente Windows-only: o PyInstaller não faz compilação cruzada.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
+
+from provas.recursos import PRODUCT_NAME
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
-NOME = "Provas"
-IDENTIFICADOR = "com.provas.selecao"
+NOME = PRODUCT_NAME
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
-MAC = sys.platform == "darwin"
+MANIFESTO = "BUILD-MANIFEST.json"
+OFFICIAL_ASSETS = {
+    name: hashlib.sha256(Path(RAIZ, "assets", name).read_bytes()).hexdigest()
+    for name in ("fanara-symbol.png", "icone.ico")
+}
 
-LEIAME_COMUM = """PROVAS — monta o PDF de seleção de fotos a partir da pasta do ensaio
+LEIAME_WINDOWS = f"""{PRODUCT_NAME} — PDF editorial a partir da pasta do ensaio
 
 PRIMEIRO USO
-Preencha "Nome do estúdio", "Site" e escolha o seu logotipo (um PNG com fundo
-transparente) no campo Logotipo. Isso fica salvo para as próximas vezes.
-Depois: escolha a pasta do ensaio, clique em "Amostra (12 fotos)" para conferir
-e então em "Gerar PDF".
+1. Extraia a pasta inteira e abra "{PRODUCT_NAME}.exe". Não separe a pasta
+   "_internal", pois ela contém as bibliotecas do aplicativo.
+2. Clique em "Escolher pasta" e depois em "Analisar fotografias".
+3. Escolha "Prova para seleção" (marca d'água e códigos) ou "Fotolivro limpo"
+   (sem os dois), revise a prévia e, se desejar, use "Trocar fotos da capa".
+4. Clique em "Exportar PDF". "Salvar projeto" grava apenas o plano e os
+   caminhos das fotos; as fotografias continuam na pasta original.
 
 O QUE ELE LÊ
-JPG, e também RAW (.NEF, .CR2, .ARW, .DNG, .ORF, .RW2 e outros). Em pastas só
-com RAW ele usa a pré-visualização em tamanho cheio que a câmera grava dentro do
-arquivo, por isso é rápido. Havendo RAW e JPG de mesmo nome, é a mesma foto.
+JPG/JPEG e RAW usuais (.NEF, .CR2, .ARW, .DNG, .ORF e .RW2). Para RAW, usa a
+prévia JPEG integrada pela câmera; não revela RAW nem aplica ajustes de cor ou
+lente. RAW e JPG de mesmo nome representam uma única foto.
 
-DOIS MODOS
-- Prova: com marca d'água e com o código do arquivo sob cada foto.
-- Álbum: desligue "Aplicar" (marca d'água) e "Códigos sob as fotos". Sem a
-  legenda, a foto sai maior.
-"""
-
-LEIAME_WINDOWS = LEIAME_COMUM + """
-COMO ABRIR
-Extraia esta pasta inteira e abra "Provas.exe". Não separe os arquivos: o
-programa depende da pasta "_internal" que está ao lado.
+PRIVACIDADE
+O pacote não contém suas preferências locais nem logotipo. Projetos .provas.json
+não guardam cópias das fotografias.
+A detecção de rosto é executada localmente; nenhuma fotografia é enviada pela
+internet.
 
 AVISO DO WINDOWS
 Por ser um programa sem assinatura digital paga, pode aparecer "O Windows
@@ -58,124 +55,229 @@ protegeu o computador". Clique em "Mais informações" e depois em "Executar
 assim mesmo".
 """
 
-LEIAME_MAC = LEIAME_COMUM + """
-COMO ABRIR
-Arraste "Provas.app" para a pasta Aplicativos (ou deixe onde preferir).
 
-AVISO DO macOS — IMPORTANTE
-Na primeira vez o macOS vai recusar, dizendo que o desenvolvedor não pode ser
-verificado. Isso acontece com qualquer programa sem assinatura paga da Apple.
-Para liberar: clique com o botão direito (ou Control+clique) no Provas.app e
-escolha "Abrir", e então confirme "Abrir" na caixa que aparecer. Só é preciso
-fazer isso uma vez.
+def dados_pyinstaller() -> list[str]:
+    """Bundle UI and the minimal local face-detector runtime."""
+    import cv2
+    from PySide6 import __file__ as pyside_package
 
-Se mesmo assim disser que o app "está danificado", abra o Terminal e rode:
-    xattr -dr com.apple.quarantine "/caminho/para/Provas.app"
+    theme = os.path.join(RAIZ, "provas", "ui", "theme.qss")
+    platform_plugin = os.path.join(
+        os.path.dirname(pyside_package), "plugins", "platforms", "qwindows.dll",
+    )
+    cascade = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    official_data = (
+        (os.path.join(RAIZ, "assets", "fanara-symbol.png"), "assets"),
+        (os.path.join(RAIZ, "assets", "icone.ico"), "assets"),
+        (os.path.join(RAIZ, "assets", "fonts", "BodoniModa[opsz,wght].ttf"), "assets/fonts"),
+        (os.path.join(RAIZ, "assets", "fonts", "OFL-BodoniModa.txt"), "assets/fonts"),
+    )
+    if not os.path.isfile(cascade):
+        raise FileNotFoundError(f"Cascade Haar local não encontrado: {cascade}")
+    arguments = [
+        "--add-data", f"{theme}{os.pathsep}provas/ui",
+        "--add-binary", f"{platform_plugin}{os.pathsep}PySide6/plugins/platforms",
+        "--add-data", f"{cascade}{os.pathsep}cv2/data",
+        "--hidden-import", "cv2",
+        "--hidden-import", "numpy",
+        # O detector usa apenas cvtColor/CascadeClassifier. O código Python
+        # opcional de Graph API é carregado dinamicamente e pode ser omitido.
+        "--exclude-module", "cv2.gapi",
+    ]
+    for source, destination in official_data:
+        arguments.extend(("--add-data", f"{source}{os.pathsep}{destination}"))
+    return arguments
 
-Requer macOS Monterey (12) ou mais novo.
-"""
+
+def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
+    """Return actionable packaging contract violations without extracting data."""
+    from PIL import Image
+
+    obrigatorios = (
+        f"{NOME}/{NOME}.exe",
+        f"{NOME}/BUILD-MANIFEST.json",
+        f"{NOME}/LEIA-ME.txt",
+    )
+    prefixo_interno = f"{NOME.casefold()}/_internal/"
+    problemas: list[str] = []
+    with zipfile.ZipFile(pacote) as archive:
+        nomes = tuple(name.replace("\\", "/") for name in archive.namelist())
+        hashes = {
+            name.lower(): hashlib.sha256(archive.read(original)).hexdigest()
+            for name, original in zip(nomes, archive.namelist())
+            if name.lower() in {
+                f"{prefixo_interno}assets/{asset}" for asset in OFFICIAL_ASSETS
+            }
+        }
+    minusculos = tuple(name.lower() for name in nomes)
+    for obrigatorio in obrigatorios:
+        if obrigatorio.lower() not in minusculos:
+            problemas.append(f"arquivo obrigatório ausente: {obrigatorio}")
+    ativos = {
+        "QSS": lambda name: name.endswith("/provas/ui/theme.qss"),
+        "qwindows": lambda name: name.endswith("/pyside6/plugins/platforms/qwindows.dll"),
+        "cascade Haar": lambda name: name.endswith("/cv2/data/haarcascade_frontalface_default.xml"),
+        "símbolo Fanara": lambda name: name == f"{prefixo_interno}assets/fanara-symbol.png",
+        "ícone Fanara": lambda name: name == f"{prefixo_interno}assets/icone.ico",
+        "Bodoni Moda": lambda name: name == f"{prefixo_interno}assets/fonts/bodonimoda[opsz,wght].ttf",
+        "licença OFL": lambda name: name == f"{prefixo_interno}assets/fonts/ofl-bodonimoda.txt",
+    }
+    for rotulo, presente in ativos.items():
+        if not any(presente(name) for name in minusculos):
+            problemas.append(f"ativo obrigatório ausente: {rotulo}")
+    proibidos = {"config.json", "logo.png"}
+    Image.init()
+    extensoes_de_imagem = set(Image.registered_extensions()) | {
+        ".nef", ".cr2", ".arw", ".dng", ".orf", ".rw2",
+    }
+    for name in minusculos:
+        if Path(name).name in proibidos:
+            problemas.append(f"dado de usuário incluído: {name}")
+        elif name.endswith(".provas.json"):
+            problemas.append(f"projeto de usuário incluído: {name}")
+        elif name in {
+            f"{prefixo_interno}assets/{asset}" for asset in OFFICIAL_ASSETS
+        }:
+            asset = Path(name).name
+            if hashes.get(name) != OFFICIAL_ASSETS[asset]:
+                problemas.append(f"ativo oficial com hash inválido: {name}")
+        elif Path(name).suffix in extensoes_de_imagem:
+            problemas.append(f"fotografia ou logotipo incluído no pacote: {name}")
+    return tuple(problemas)
+
+
+def remover_dados_usuario(pasta: str) -> None:
+    """Never ship the local preferences or a photographer's watermark asset."""
+    for nome in ("config.json", "logo.png"):
+        caminho = os.path.join(pasta, nome)
+        if os.path.isfile(caminho):
+            os.unlink(caminho)
 
 
 def gerar_icone() -> str | None:
-    """Ícone neutro: um losango claro sobre fundo grafite, sem marca de estúdio.
-
-    No macOS o PyInstaller converte o PNG para .icns; no Windows usa o .ico.
-    """
+    """Regenerate the tracked official identity before freezing the executable."""
     try:
-        from PIL import Image, ImageDraw
+        from provas.recursos import gerar_identidade_oficial
     except ImportError:
         return None
-    pasta = os.path.join(RAIZ, "assets")
-    os.makedirs(pasta, exist_ok=True)
-
-    lado, escala = 512, 2
-    tela = Image.new("RGBA", (lado * escala, lado * escala), (22, 22, 26, 255))
-    desenho = ImageDraw.Draw(tela)
-    meio = lado * escala / 2
-    raio = lado * escala * 0.33
-    desenho.polygon([(meio, meio - raio), (meio + raio, meio),
-                     (meio, meio + raio), (meio - raio, meio)], fill=(236, 237, 240, 255))
-    interno = raio * 0.45
-    desenho.polygon([(meio, meio - interno), (meio + interno, meio),
-                     (meio, meio + interno), (meio - interno, meio)], fill=(216, 64, 96, 255))
-    tela = tela.resize((lado, lado), Image.Resampling.LANCZOS)
-
-    if MAC:
-        caminho = os.path.join(pasta, "icone.png")
-        tela.save(caminho)
-        return caminho
-    caminho = os.path.join(pasta, "icone.ico")
-    tela.resize((256, 256), Image.Resampling.LANCZOS).save(
-        caminho, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    source = Path(RAIZ, "assets", "fanara-symbol-source.png")
+    symbol = Path(RAIZ, "assets", "fanara-symbol.png")
+    caminho = os.path.join(RAIZ, "assets", "icone.ico")
+    gerar_identidade_oficial(source, symbol, Path(caminho))
     return caminho
 
 
 def compactar(alvo: str, destino_zip: str) -> str:
-    """Compacta preservando permissões — no macOS isso importa para o .app."""
-    if MAC and shutil.which("ditto"):
-        subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
-                        alvo, destino_zip], check=True)
-        return destino_zip
-    return shutil.make_archive(os.path.splitext(destino_zip)[0], "zip",
-                               os.path.dirname(alvo), os.path.basename(alvo))
+    return shutil.make_archive(os.path.splitext(destino_zip)[0], "zip", os.path.dirname(alvo), os.path.basename(alvo))
+
+
+def _fontes_do_pacote() -> tuple[Path, ...]:
+    root = Path(RAIZ)
+    fixed = tuple(
+        root / name for name in (
+            "pyproject.toml", "provas_cli.py", "Provas.pyw", "verificar.py", "empacotar.py",
+            "assets/fanara-symbol-source.png", "assets/fanara-symbol.png", "assets/icone.ico",
+            "assets/fonts/BodoniModa[opsz,wght].ttf", "assets/fonts/OFL-BodoniModa.txt",
+        )
+    )
+    package = tuple(path for path in (root / "provas").rglob("*") if path.suffix in {".py", ".qss"})
+    return tuple(sorted((*fixed, *package), key=lambda path: path.relative_to(root).as_posix()))
+
+
+def fingerprint_fontes() -> str:
+    """Hash every source file that can affect the frozen executable."""
+    digest = hashlib.sha256()
+    root = Path(RAIZ)
+    for path in _fontes_do_pacote():
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        data = path.read_bytes()
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def commit_atual() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=RAIZ, text=True, capture_output=True, check=True,
+    )
+    return completed.stdout.strip()
+
+
+def escrever_manifesto(alvo: str) -> None:
+    executable = Path(alvo, f"{NOME}.exe")
+    Path(alvo, MANIFESTO).write_text(
+        json.dumps(
+            {
+                "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                "git_commit": commit_atual(),
+                "source_sha256": fingerprint_fontes(),
+            },
+            ensure_ascii=False, indent=2, sort_keys=True,
+        ) + "\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
+    if sys.platform != "win32":
+        print("Este empacotador gera somente o pacote Windows; execute-o no Windows.")
+        return 1
     try:
         import PyInstaller  # noqa: F401
     except ImportError:
-        print("PyInstaller não está instalado. Rode:  python -m pip install pyinstaller")
+        print("PyInstaller não está instalado. Rode: python -m pip install pyinstaller")
         return 1
 
     with open(ENTRADA, "w", encoding="utf-8") as arquivo:
-        arquivo.write("from provas.app import principal\n\nprincipal()\n")
+        arquivo.write(
+            "import sys\n\n"
+            "if len(sys.argv) > 1:\n"
+            "    from provas_cli import main\n"
+            "    raise SystemExit(main(sys.argv[1:]))\n\n"
+            "from provas.app import principal\n\n"
+            "raise SystemExit(principal())\n"
+        )
 
-    icone = gerar_icone()
     comando = [
-        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-        "--windowed", "--name", NOME,
-        "--distpath", os.path.join(RAIZ, "dist"),
-        "--workpath", os.path.join(RAIZ, "build"),
-        "--specpath", os.path.join(RAIZ, "build"),
-        "--paths", RAIZ,
-        # o app usa só tkinter, Pillow e PyMuPDF; o resto é peso morto no pacote
-        "--exclude-module", "numpy", "--exclude-module", "matplotlib",
-        "--exclude-module", "scipy", "--exclude-module", "pandas",
-        "--exclude-module", "PIL.ImageQt", "--exclude-module", "PyQt5",
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", NOME,
+        "--distpath", os.path.join(RAIZ, "dist"), "--workpath", os.path.join(RAIZ, "build"),
+        "--specpath", os.path.join(RAIZ, "build"), "--paths", RAIZ,
+        "--exclude-module", "matplotlib", "--exclude-module", "scipy",
+        "--exclude-module", "pandas", "--exclude-module", "PIL.ImageQt", "--exclude-module", "PyQt5",
         "--exclude-module", "PySide2", "--exclude-module", "test",
+        *dados_pyinstaller(),
     ]
+    icone = gerar_icone()
     if icone:
-        comando += ["--icon", icone]
-    if MAC:
-        comando += ["--osx-bundle-identifier", IDENTIFICADOR]
+        comando.extend(("--icon", icone))
     comando.append(ENTRADA)
 
     print("Empacotando…")
-    resultado = subprocess.run(comando, cwd=RAIZ)
-    os.remove(ENTRADA)
+    try:
+        resultado = subprocess.run(comando, cwd=RAIZ)
+    finally:
+        if os.path.exists(ENTRADA):
+            os.remove(ENTRADA)
     if resultado.returncode != 0:
         return resultado.returncode
 
-    if MAC:
-        alvo = os.path.join(RAIZ, "dist", f"{NOME}.app")
-        leiame = os.path.join(RAIZ, "dist", "LEIA-ME.txt")
-        texto = LEIAME_MAC
-        zipe = os.path.join(RAIZ, "dist", f"{NOME}-macOS.zip")
-    else:
-        alvo = os.path.join(RAIZ, "dist", NOME)
-        leiame = os.path.join(alvo, "LEIA-ME.txt")
-        texto = LEIAME_WINDOWS
-        zipe = os.path.join(RAIZ, "dist", f"{NOME}-Windows.zip")
-
+    alvo = os.path.join(RAIZ, "dist", NOME)
+    remover_dados_usuario(alvo)
+    escrever_manifesto(alvo)
+    leiame = os.path.join(alvo, "LEIA-ME.txt")
     with open(leiame, "w", encoding="utf-8") as arquivo:
-        arquivo.write(texto)
-
-    pacote = compactar(alvo, zipe)
+        arquivo.write(LEIAME_WINDOWS)
+    pacote = compactar(alvo, os.path.join(RAIZ, "dist", f"{NOME}-Windows.zip"))
+    problemas = inspecionar_pacote(pacote)
+    if problemas:
+        print("\nO pacote falhou na inspeção:")
+        for problema in problemas:
+            print(f"  - {problema}")
+        return 1
     print(f"\nAplicativo: {alvo}")
     print(f"Enviar:     {pacote}  ({os.path.getsize(pacote) / 1e6:.0f} MB)")
-    if MAC:
-        print("Lembre o destinatário de abrir a primeira vez com botão direito → Abrir.")
-        print(f"Mande junto o {leiame}.")
     return 0
 
 

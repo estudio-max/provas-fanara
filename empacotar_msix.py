@@ -1,10 +1,10 @@
-r"""Gera o pacote .msix do Provas — o formato que a Microsoft Store aceita.
+r"""Gera o pacote .msix do Fanara - Fotolivro — o formato que a Store aceita.
 
     python empacotar_msix.py
 
-Reaproveita o executável que o `empacotar.py` produz (`dist/Provas/`) e o
-embrulha num MSIX com o manifesto, os logotipos de bloco e o índice de
-recursos. Sai em `dist/Provas-<versão>-x64.msix`.
+Reaproveita o executável que o `empacotar.py` produz (`dist/Fanara - Fotolivro/`)
+e o embrulha num MSIX com o manifesto, os logotipos de bloco e o índice de
+recursos. Sai em `dist/Fanara - Fotolivro-<versão>-x64.msix`.
 
 ANTES DE ENVIAR PARA A STORE, troque os três valores abaixo pelos que o
 Partner Center mostra em "Identidade do produto" depois de reservar o nome do
@@ -25,25 +25,33 @@ import shutil
 import subprocess
 import sys
 
+from empacotar import NOME, RAIZ, gerar_icone, remover_dados_usuario
+
 # --- Partner Center → Identidade do produto -------------------------------
-IDENTIDADE = "EstudioFanara.Provas"        # "Nome do pacote"
-PUBLICADOR = "CN=Estudio Fanara"           # "Publicador" (vem como CN=<GUID>)
-NOME_PUBLICADOR = "Estúdio Fanara"         # "Nome de exibição do publicador"
+IDENTIDADE = "EstudioFanara.FanaraFotolivro"   # "Nome do pacote"
+PUBLICADOR = "CN=Estudio Fanara"               # "Publicador" (vem como CN=<GUID>)
+NOME_PUBLICADOR = "Estúdio Fanara"             # "Nome de exibição do publicador"
 # --------------------------------------------------------------------------
 
-NOME = "Provas"
-# A Store exige que o último número da versão seja 0.
+# A Store exige que o último número da versão seja 0. Acompanha a tag v1.0.0.
 VERSAO = "1.0.0.0"
-DESCRICAO = ("Monta o PDF de seleção de fotos a partir da pasta do ensaio: capa com as "
-             "próprias fotos, marca d'água gravada nos pixels e o código do arquivo sob "
-             "cada imagem. Lê JPG e a pré-visualização embutida nos arquivos RAW.")
+DESCRICAO = ("Mesa de edição para montar o fotolivro a partir da pasta do ensaio: "
+             "analisa as fotografias, diagrama as páginas, monta a capa e exporta o "
+             "PDF. Serve tanto para a prova de seleção, com marca d'água e códigos, "
+             "quanto para o fotolivro limpo.")
 
-RAIZ = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(RAIZ, "dist")
 BUILD = os.path.join(RAIZ, "build")
 PALCO = os.path.join(BUILD, "msix")
 
-MANIFESTO = r"""<?xml version="1.0" encoding="utf-8"?>
+# Os três que a Store cobra; o resto o Windows deriva destes.
+LOGOTIPOS = {
+    "Square44x44Logo.png": 44,
+    "Square150x150Logo.png": 150,
+    "StoreLogo.png": 50,
+}
+
+MANIFESTO_XML = r"""<?xml version="1.0" encoding="utf-8"?>
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
@@ -69,15 +77,15 @@ MANIFESTO = r"""<?xml version="1.0" encoding="utf-8"?>
   </Resources>
 
   <Applications>
-    <Application Id="Provas" Executable="Provas\Provas.exe"
+    <Application Id="Fotolivro" Executable="{nome}\{nome}.exe"
                  EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="{nome}"
         Description="{descricao}"
-        BackgroundColor="#16161a"
+        BackgroundColor="#111215"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile ShortName="{nome}" />
+        <uap:DefaultTile ShortName="Fotolivro" />
       </uap:VisualElements>
     </Application>
   </Applications>
@@ -88,12 +96,12 @@ MANIFESTO = r"""<?xml version="1.0" encoding="utf-8"?>
 </Package>
 """
 
-# Os três que a Store cobra; o resto o Windows deriva destes.
-LOGOTIPOS = {
-    "Square44x44Logo.png": 44,
-    "Square150x150Logo.png": 150,
-    "StoreLogo.png": 50,
-}
+
+def manifesto() -> str:
+    """O AppxManifest.xml deste build. Isolado para o teste poder conferi-lo."""
+    return MANIFESTO_XML.format(
+        identidade=IDENTIDADE, publicador=PUBLICADOR, versao=VERSAO,
+        nome=NOME, nome_publicador=NOME_PUBLICADOR, descricao=DESCRICAO)
 
 
 def ferramenta(nome: str) -> str:
@@ -105,8 +113,7 @@ def ferramenta(nome: str) -> str:
     achados = sorted(c for p in padroes for c in glob.glob(p))
     if not achados:
         raise SystemExit(
-            f"{nome} não encontrado. Instale o Windows SDK (componente "
-            f'"Windows SDK Signing Tools"/"MSIX Packaging Tools"):\n'
+            f"{nome} não encontrado. Instale o Windows SDK:\n"
             "  winget install Microsoft.WindowsSDK.10.0.26100")
     return achados[-1]
 
@@ -115,7 +122,7 @@ def montar_palco() -> None:
     """Monta a árvore que vira o pacote: o app, os logotipos e o manifesto."""
     origem = os.path.join(DIST, NOME)
     if not os.path.isfile(os.path.join(origem, f"{NOME}.exe")):
-        print("dist/Provas ainda não existe — rodando empacotar.py…")
+        print("dist ainda não existe — rodando empacotar.py…")
         if subprocess.run([sys.executable, os.path.join(RAIZ, "empacotar.py")],
                           cwd=RAIZ).returncode != 0:
             raise SystemExit("empacotar.py falhou.")
@@ -123,17 +130,17 @@ def montar_palco() -> None:
     shutil.rmtree(PALCO, ignore_errors=True)
     os.makedirs(PALCO)
 
-    # config.json é do meu computador e LEIA-ME é conversa de zip: nenhum dos
-    # dois vai para a Store.
-    shutil.copytree(origem, os.path.join(PALCO, NOME),
-                    ignore=shutil.ignore_patterns("config.json", "LEIA-ME.txt"))
+    destino = os.path.join(PALCO, NOME)
+    shutil.copytree(origem, destino)
+    # Mesmo contrato do zip: preferências e marca d'água do fotógrafo não saem
+    # desta máquina.
+    remover_dados_usuario(destino)
 
     from PIL import Image
-    icone = os.path.join(RAIZ, "assets", "icone.ico")
-    if not os.path.isfile(icone):
-        import empacotar
-        empacotar.gerar_icone()
-    base = Image.open(icone).convert("RGBA")
+    simbolo = os.path.join(RAIZ, "assets", "fanara-symbol.png")
+    if not os.path.isfile(simbolo):
+        gerar_icone()
+    base = Image.open(simbolo).convert("RGBA")
     pasta = os.path.join(PALCO, "Assets")
     os.makedirs(pasta)
     for arquivo, lado in LOGOTIPOS.items():
@@ -141,9 +148,7 @@ def montar_palco() -> None:
             os.path.join(pasta, arquivo))
 
     with open(os.path.join(PALCO, "AppxManifest.xml"), "w", encoding="utf-8") as saida:
-        saida.write(MANIFESTO.format(
-            identidade=IDENTIDADE, publicador=PUBLICADOR, versao=VERSAO,
-            nome=NOME, nome_publicador=NOME_PUBLICADOR, descricao=DESCRICAO))
+        saida.write(manifesto())
 
 
 def indexar_recursos() -> None:
@@ -176,7 +181,7 @@ def main() -> int:
     print(f"Identidade: {IDENTIDADE} / {PUBLICADOR} / {VERSAO}")
     print("\nTestar aqui (Modo de Desenvolvedor ligado):")
     print(rf"  Add-AppxPackage -Register {os.path.join(PALCO, 'AppxManifest.xml')}")
-    print("  Get-AppxPackage *Provas* | Remove-AppxPackage      (para desinstalar)")
+    print("  Get-AppxPackage *Fotolivro* | Remove-AppxPackage    (para desinstalar)")
     print()
     print("Enviar: Partner Center > seu app > Pacotes > arraste o .msix.")
     return 0

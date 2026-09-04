@@ -1,0 +1,310 @@
+from __future__ import annotations
+
+from pathlib import Path
+import json
+import subprocess
+import sys
+
+import pymupdf
+import pytest
+from PIL import Image
+
+
+ROOT = Path(__file__).parents[1]
+CLI = ROOT / "provas_cli.py"
+
+
+def executar(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(CLI), *args],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_cli_gera_amostra_de_prova_com_semente_e_mensagens_em_portugues(
+    tmp_path: Path, image_factory
+):
+    image_factory("prova.jpg", size=(300, 450))
+    saida = tmp_path / "prova.pdf"
+
+    result = executar(
+        str(tmp_path), "--modo", "prova", "--semente", "42", "--amostra", "--saida", str(saida),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert saida.exists()
+    assert "Modo: prova" in result.stdout
+    assert "Semente: 42" in result.stdout
+    assert "fotos" in result.stdout
+    with pymupdf.open(saida) as pdf:
+        assert "prova" in "".join(page.get_text().lower() for page in pdf)
+
+
+def test_cli_gera_amostra_de_fotolivro_sem_marca_ou_codigos(tmp_path: Path, image_factory):
+    image_factory("fotolivro.jpg", size=(300, 450))
+    saida = tmp_path / "fotolivro.pdf"
+
+    result = executar(str(tmp_path), "--modo", "fotolivro", "--amostra", "--saida", str(saida))
+
+    assert result.returncode == 0, result.stderr
+    assert saida.exists()
+    assert "Modo: fotolivro" in result.stdout
+    with pymupdf.open(saida) as pdf:
+        assert "fotolivro" not in "".join(page.get_text().lower() for page in pdf)
+
+
+def test_cli_rejeita_modo_invalido_em_portugues(tmp_path: Path):
+    result = executar(str(tmp_path), "--modo", "album")
+
+    assert result.returncode == 2
+    assert "modo inválido" in result.stderr.lower()
+
+
+def test_cli_salva_e_abre_projeto_apenas_em_novo_destino_pdf_explicito(tmp_path: Path, image_factory):
+    image_factory("projeto.jpg", size=(300, 450))
+    projeto = tmp_path / "sessao.provas.json"
+    saida = tmp_path / "projeto.pdf"
+
+    saved = executar(
+        str(tmp_path), "--modo", "fotolivro", "--semente", "42", "--amostra",
+        "--salvar-projeto", str(projeto), "--saida", str(saida),
+    )
+    recusado = executar("--abrir-projeto", str(projeto))
+    destino_reaberto = tmp_path / "reaberto.pdf"
+    opened = executar("--abrir-projeto", str(projeto), "--saida", str(destino_reaberto))
+
+    assert saved.returncode == 0, saved.stderr
+    assert projeto.exists()
+    assert "Projeto salvo" in saved.stdout
+    assert recusado.returncode == 2
+    assert "--saida" in recusado.stderr
+    assert opened.returncode == 0, opened.stderr
+    assert "Projeto aberto" in opened.stdout
+    assert destino_reaberto.exists()
+
+
+def test_cli_rejeita_destino_de_reabertura_que_nao_e_pdf(tmp_path: Path, image_factory):
+    image_factory("projeto.jpg", size=(300, 450))
+    projeto = tmp_path / "sessao.provas.json"
+    executar(str(tmp_path), "--amostra", "--salvar-projeto", str(projeto))
+
+    result = executar("--abrir-projeto", str(projeto), "--saida", str(tmp_path / "fora.txt"))
+
+    assert result.returncode == 2
+    assert "pdf" in result.stderr.lower()
+
+
+def test_cli_preserva_pdf_existente_sem_consentimento_explicito(tmp_path: Path, image_factory):
+    image_factory("retrato.jpg", size=(300, 450))
+    saida = tmp_path / "existente.pdf"
+    original = b"PDF anterior deve permanecer intacto"
+    saida.write_bytes(original)
+
+    result = executar(str(tmp_path), "--amostra", "--saida", str(saida))
+
+    assert result.returncode == 1
+    assert saida.read_bytes() == original
+    assert "já existe" in result.stderr.lower()
+    assert "--sobrescrever" in result.stderr
+    assert "file exists" not in result.stderr.lower()
+
+
+def test_cli_sobrescreve_pdf_de_projeto_somente_com_flag_explicita(
+    tmp_path: Path, image_factory
+):
+    image_factory("projeto.jpg", size=(300, 450))
+    projeto = tmp_path / "sessao.provas.json"
+    primeira_saida = tmp_path / "primeira.pdf"
+    saved = executar(
+        str(tmp_path), "--amostra", "--salvar-projeto", str(projeto),
+        "--saida", str(primeira_saida),
+    )
+    assert saved.returncode == 0, saved.stderr
+    destino = tmp_path / "reexportado.pdf"
+    destino.write_bytes(b"arquivo anterior")
+
+    result = executar(
+        "--abrir-projeto", str(projeto), "--saida", str(destino), "--sobrescrever"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert destino.read_bytes().startswith(b"%PDF")
+    with pymupdf.open(destino) as pdf:
+        assert pdf.page_count >= 1
+
+
+def test_cli_album_e_alias_obsoleto_para_fotolivro(tmp_path: Path, image_factory):
+    image_factory("album.jpg", size=(300, 450))
+    saida = tmp_path / "album.pdf"
+
+    result = executar(str(tmp_path), "--album", "--amostra", "--saida", str(saida))
+
+    assert result.returncode == 0, result.stderr
+    assert "Modo: fotolivro" in result.stdout
+    assert saida.exists()
+
+
+def test_cli_rejeita_flags_que_quebrariam_os_modos_e_mantem_help_em_portugues(tmp_path: Path):
+    result = executar(str(tmp_path), "--sem-marca")
+    help_result = executar("--help")
+
+    assert result.returncode == 2
+    assert "não reconhecido" in result.stderr.lower()
+    assert "uso:" in help_result.stdout.lower()
+    assert "opções:" in help_result.stdout.lower()
+    assert "--sem-marca" not in help_result.stdout
+
+
+def test_product_name_is_exposed_by_cli_diagnostics_and_readme():
+    from provas.recursos import PRODUCT_NAME
+
+    help_result = executar("--help")
+    diagnostic_result = subprocess.run(
+        [sys.executable, str(ROOT / "verificar.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert PRODUCT_NAME == "Fanara - Fotolivro"
+    assert PRODUCT_NAME in help_result.stdout
+    assert diagnostic_result.returncode == 0, diagnostic_result.stdout + diagnostic_result.stderr
+    assert PRODUCT_NAME in diagnostic_result.stdout
+    assert f"`{PRODUCT_NAME}.exe`" in readme
+    assert f"`dist/{PRODUCT_NAME}-Windows.zip`" in readme
+
+
+@pytest.mark.parametrize(
+    ("args", "mensagem"),
+    [
+        ((), "informe a pasta"),
+        (("--modo",), "exige um valor"),
+        (("--modo", "-n"), "exige um valor"),
+        (("--por-pagina", "quatro"), "número inteiro inválido"),
+        (("--qualidade", "ultra"), "qualidade inválida"),
+        (("--capa", "desconhecida"), "capa inválida"),
+        (("--desconhecida",), "argumentos não reconhecidos"),
+    ],
+)
+def test_cli_erros_comuns_do_argparse_sao_integralmente_em_portugues(args, mensagem):
+    result = executar(*args)
+
+    assert result.returncode == 2
+    assert mensagem in result.stderr.lower()
+    assert "usage:" not in result.stderr.lower()
+    assert "error:" not in result.stderr.lower()
+    assert "invalid" not in result.stderr.lower()
+    assert "argument " not in result.stderr.lower()
+
+
+def test_cli_ajuda_curta_e_uso_nao_expoem_texto_ingles():
+    result = executar("-h")
+
+    assert result.returncode == 0
+    assert "uso:" in result.stdout.lower()
+    assert "mostra esta ajuda e encerra" in result.stdout.lower()
+    assert "usage:" not in result.stdout.lower()
+    assert "show this help message" not in result.stdout.lower()
+
+
+def test_cli_aceita_capa_curva_com_identidade_completa(tmp_path: Path, image_factory):
+    for indice in range(6):
+        image_factory(f"retrato-{indice}.jpg", size=(300, 450))
+    logo = tmp_path / "marca.png"
+    Image.new("RGBA", (180, 60), (255, 255, 255, 255)).save(logo)
+    saida = tmp_path / "curvas.pdf"
+    projeto = tmp_path / "curvas.provas.json"
+
+    result = executar(
+        str(tmp_path), "--modo", "fotolivro", "--capa", "curvas_editoriais",
+        "--titulo", "Sessão Aurora", "--estudio", "Estúdio Fanara",
+        "--site", "fanara.com.br", "--logo", str(logo), "--saida", str(saida),
+        "--salvar-projeto", str(projeto),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert saida.exists()
+    payload = json.loads(projeto.read_text(encoding="utf-8"))
+    esperado = {
+        "estilo_capa": "curvas_editoriais", "titulo": "Sessão Aurora",
+        "estudio": "Estúdio Fanara", "site": "fanara.com.br", "logo": str(logo),
+    }
+    assert {chave: payload["config"][chave] for chave in esperado} == esperado
+
+
+def test_cli_documenta_apenas_os_dois_estilos_de_capa_suportados():
+    result = executar("--help")
+
+    assert result.returncode == 0
+    assert "--capa {mosaico,curvas_editoriais}" in result.stdout
+    assert "losango" not in result.stdout
+    assert "destaque" not in result.stdout
+
+
+def test_readme_documenta_privacidade_migracao_logo_e_comandos_dos_dois_estilos():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "A detecção de rosto é executada localmente; nenhuma fotografia é enviada pela internet" in readme
+    assert "Projetos v1 abrem como mosaico" in readme
+    assert "Logotipo inválido é ignorado com aviso" in readme
+    assert "--modo prova --capa mosaico" in readme
+    assert "--modo fotolivro --capa curvas_editoriais" in readme
+    assert "--sobrescrever" in readme
+
+
+def test_verificador_lista_dependencias_editoriais_e_permissao_de_escrita():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "verificar.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PySide6" in result.stdout
+    assert "permissão de escrita" in result.stdout.lower()
+    assert "pipeline editorial" in result.stdout.lower()
+
+
+def test_verificador_compara_versoes_minimas_e_ainda_diagnostica_fontes(monkeypatch, capsys):
+    import verificar
+
+    monkeypatch.setattr(verificar, "diagnosticar_dependencias", lambda: 1)
+    monkeypatch.setattr(verificar, "testar_escrita", lambda: 0)
+    monkeypatch.setattr(verificar, "testar_pipeline_editorial", lambda: 0)
+    fontes = []
+    monkeypatch.setattr(verificar, "diagnosticar_fontes", lambda: fontes.append(True))
+
+    assert verificar.main([]) == 1
+    assert fontes == [True]
+    assert "Resolva" in capsys.readouterr().out
+
+
+def test_verificador_rejeita_versoes_abaixo_do_minimo():
+    import verificar
+
+    assert verificar.versao_compativel("9.9", "10.0") is False
+    assert verificar.versao_compativel("1.23.9", "1.24") is False
+    assert verificar.versao_compativel("10.0rc1", "10.0") is False
+    assert verificar.versao_compativel("6.7.0", "6.7") is True
+
+
+def test_verificador_sem_packaging_nao_falha_no_import_e_readme_instala_o_projeto():
+    result = subprocess.run(
+        [sys.executable, "-S", str(ROOT / "verificar.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "packaging" in result.stdout.lower()
+    assert "traceback" not in result.stderr.lower()
+    assert "pip install ." in (ROOT / "README.md").read_text(encoding="utf-8")

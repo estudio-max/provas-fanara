@@ -4,13 +4,15 @@ from __future__ import annotations
 import io
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 
-from PIL import Image, ImageChops, ImageDraw, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
 from . import raw, tema
 
 EXTENSOES_JPG = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
+_FONT_CANDIDATES = ("arialbd.ttf", "DejaVuSans-Bold.ttf")
 
 # orientação Exif -> transposições do Pillow
 _TRANSPOSICOES = {
@@ -135,6 +137,38 @@ def logo_branco(logo: Image.Image) -> Image.Image:
     branco = Image.new("RGBA", logo.size, (255, 255, 255, 255))
     branco.putalpha(logo.getchannel("A"))
     return branco
+
+
+def _fonte_marca(label: str):
+    for candidate in _FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, 72), label
+        except OSError:
+            continue
+    safe_label = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode("ascii")
+    return ImageFont.load_default(size=72), safe_label
+
+
+def marca_textual(texto: str = "PROVA PARA SELEÇÃO") -> Image.Image:
+    """Create a restrained typographic watermark when no studio logo is available."""
+    label = " ".join(texto.strip().upper().split()) or "PROVA PARA SELEÇÃO"
+    font, label = _fonte_marca(label)
+    probe = Image.new("L", (1, 1), 0)
+    bounds = ImageDraw.Draw(probe).textbbox((0, 0), label, font=font, stroke_width=1)
+    padding_x, padding_y = 44, 24
+    width = max(1, bounds[2] - bounds[0] + padding_x * 2)
+    height = max(1, bounds[3] - bounds[1] + padding_y * 2)
+    watermark = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    drawing = ImageDraw.Draw(watermark)
+    drawing.text(
+        (padding_x - bounds[0], padding_y - bounds[1]),
+        label,
+        font=font,
+        fill=(255, 255, 255, 255),
+        stroke_width=1,
+        stroke_fill=(255, 255, 255, 255),
+    )
+    return watermark
 
 
 def aplicar_marca_dagua(imagem: Image.Image, logo_alvo: Image.Image,

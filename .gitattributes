@@ -1,0 +1,4 @@
+# Os arquivos de assets/ são conferidos por hash (empacotar.OFFICIAL_ASSETS e
+# verificar.diagnosticar_recursos). Com core.autocrlf=true o checkout troca LF
+# por CRLF e muda os bytes — a licença da Bodoni Moda passou a falhar assim.
+assets/** -text
