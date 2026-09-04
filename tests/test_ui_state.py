@@ -719,7 +719,10 @@ def test_replace_page_preview_keeps_card_scroll_and_lru_entry(qapp, tmp_path: Pa
 
     grid.replace_page_preview(1, replacement)
 
-    cache_key = (full_plan.seed, full_plan.mode, 1, pages[0].template_id, pages[0].photo_ids)
+    cache_key = (
+        full_plan.seed, full_plan.mode, 1, pages[0].template_id, pages[0].photo_ids,
+        grid._style_token,
+    )
     assert grid.card(1) is card
     assert card.geometry() == original_geometry
     assert scrollbar.value() == original_scroll

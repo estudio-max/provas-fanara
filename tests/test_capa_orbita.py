@@ -468,17 +468,20 @@ def test_render_fingerprint_includes_cover_style_identity_logo_stat_and_seed(
     mosaic = motor.Config(**common, estilo_capa="mosaico")
     curved = motor.Config(**common, estilo_capa="curvas_editoriais")
 
-    baseline = motor._render_style_fingerprint(mosaic, "fotolivro", 101)
+    baseline = motor.render_style_fingerprint(mosaic, "fotolivro", 101)
 
-    assert baseline != motor._render_style_fingerprint(curved, "fotolivro", 101)
-    assert baseline != motor._render_style_fingerprint(mosaic, "fotolivro", 102)
-    assert baseline != motor._render_style_fingerprint(
+    # O estilo da capa ficou de fora: ele não desenha página interna, e incluí-lo
+    # fazia a troca de capa descartar a miniatura de todas as páginas.
+    assert baseline == motor.render_style_fingerprint(curved, "fotolivro", 101)
+
+    assert baseline != motor.render_style_fingerprint(mosaic, "fotolivro", 102)
+    assert baseline != motor.render_style_fingerprint(
         motor.Config(**{**common, "titulo": "Outro título"}, estilo_capa="mosaico"),
         "fotolivro",
         101,
     )
     logo.write_bytes(b"changed-logo-state")
-    assert baseline != motor._render_style_fingerprint(mosaic, "fotolivro", 101)
+    assert baseline != motor.render_style_fingerprint(mosaic, "fotolivro", 101)
 
 
 def test_switching_cover_style_keeps_plan_and_internal_page_pixels(

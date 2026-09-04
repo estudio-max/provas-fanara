@@ -5,6 +5,7 @@ from .diagnostics import DiagnosticsPanel
 from .main_window import MainWindow
 from .preview_grid import PreviewGrid
 from .sidebar import WorkflowSidebar
+from .welcome_dialog import WelcomeDialog
 from .workers import AnalysisWorker, ExportWorker, PreviewWorker
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "MainWindow",
     "PreviewGrid",
     "PreviewWorker",
+    "WelcomeDialog",
     "WorkflowSidebar",
 ]
 

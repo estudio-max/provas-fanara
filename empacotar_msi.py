@@ -11,7 +11,7 @@ desinstalar. Sai em `dist/Fanara - Fotolivro-Setup-<versão>.msi`.
 Um .msi já sabe instalar silenciosamente sozinho, sem precisar de nenhum
 interruptor customizado:
 
-    msiexec /i "Fanara - Fotolivro-Setup-1.0.0.msi" /quiet
+    msiexec /i "Fanara - Fotolivro-Setup-<versão>.msi" /quiet
 
 Por isso, no formulário da Store, em "Parâmetros do instalador", marque
 "O instalador roda no modo silencioso, mas não requer interruptores" — não é
@@ -29,16 +29,17 @@ import subprocess
 import sys
 
 from empacotar import NOME, RAIZ, gerar_icone, remover_dados_usuario
+from provas.recursos import ORGANIZATION_NAME, VERSION
 
 # Fixo entre versões: é o que permite ao Windows Installer saber que duas
 # versões são o "mesmo" produto e fazer upgrade em vez de instalar em paralelo.
 # Não troque isto depois de publicado.
 UPGRADE_CODE = "5887D8AE-339F-4C20-B36C-215E814004A1"
 
-# Acompanha a tag do app. A Store guarda cada versão numa URL própria
-# (.../downloads/1.0.0/...), então incremente aqui a cada envio novo.
-VERSAO = "1.0.0"
-FABRICANTE = "Estúdio Fanara"
+# Fonte única em provas/recursos.py: a versão que o app mostra na abertura
+# é a mesma que a Store recebe. A URL do pacote segue .../downloads/<versão>/.
+VERSAO = VERSION
+FABRICANTE = ORGANIZATION_NAME
 
 DIST = os.path.join(RAIZ, "dist")
 BUILD = os.path.join(RAIZ, "build", "msi")

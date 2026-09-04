@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
-from .recursos import PRODUCT_NAME
-from .ui import MainWindow
+from . import preferencias
+from .recursos import ORGANIZATION_NAME, PRODUCT_NAME, VERSION
+from .ui import MainWindow, WelcomeDialog
 
 
 def principal() -> int:
@@ -20,9 +21,25 @@ def principal() -> int:
     if app is None:
         app = QApplication(sys.argv)
     app.setApplicationName(PRODUCT_NAME)
-    app.setOrganizationName("Provas")
+    app.setApplicationVersion(VERSION)
+    app.setOrganizationName(ORGANIZATION_NAME)
     window = MainWindow()
     window.show()
+    # Depois do primeiro ciclo do laço: a mesa de edição pinta primeiro e a
+    # abertura surge sobre ela, em vez de a janela nascer atrás de um modal.
+    QTimer.singleShot(0, app, lambda: abrir_boas_vindas(window))
     if owns_application:
         return app.exec()
     return 0
+
+
+def abrir_boas_vindas(window: MainWindow) -> None:
+    """Mostra a abertura sobre a janela já visível, se o usuário não a dispensou."""
+    if not preferencias.mostrar_boas_vindas():
+        return
+    dialogo = WelcomeDialog(window)
+    escolher_pasta = dialogo.exec() == int(WelcomeDialog.DialogCode.Accepted)
+    if dialogo.dispensada:
+        preferencias.definir_mostrar_boas_vindas(False)
+    if escolher_pasta:
+        window.choose_folder()

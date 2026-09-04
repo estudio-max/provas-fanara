@@ -27,7 +27,13 @@ from ..capas import validate_cover_style
 from ..capa_classica import ClassicCrop
 from ..ciclo_paginas import tem_alternativa
 from ..modelos import BookPlan, PhotoInfo
-from ..motor import Config, PageCycleResult, PlanAnalysisResult, Resultado
+from ..motor import (
+    Config,
+    PageCycleResult,
+    PlanAnalysisResult,
+    Resultado,
+    render_style_fingerprint,
+)
 from ..projeto import ProjectSchemaError, ProjectState, load_project, save_project, undo_regeneration
 from .. import recursos
 from .cover_dialog import CoverDialog
@@ -595,7 +601,15 @@ class MainWindow(QMainWindow):
             ):
                 self._classic_preview_photo_id = classic_photo_id
                 self._classic_preview_target = classic_target
-        self.preview_grid.set_previews(self.project_state.plan, items)
+        # A grade guarda as miniaturas convertidas; sem o estilo na chave ela
+        # devolveria a imagem anterior quando só a aparência muda.
+        plan = self.project_state.plan
+        self.preview_grid.set_style_token(
+            render_style_fingerprint(
+                self.project_state.config.to_motor_config(), plan.mode, plan.seed
+            )
+        )
+        self.preview_grid.set_previews(plan, items)
         self._update_page_cycle_availability()
         self._end_operation()
         if warnings:

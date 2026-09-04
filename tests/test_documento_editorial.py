@@ -390,16 +390,29 @@ def test_legacy_card_shadow_is_vector_clipped_and_preserves_its_jpeg(tmp_path: P
 
 def test_thumbnail_reuses_pdf_rendering_rules_and_cache(image_factory):
     from provas import preview
+    from provas.documento import Documento, Tipografia
 
     path = image_factory("vertical.jpg", size=(200, 300), color=(220, 40, 40))
     info = _photo(path, 0)
     plan = BookPlan(91, "prova", (), (PagePlan(1, "single-portrait", (info.id,), "opening"),))
     assets = {info.id: info}
 
-    first = preview.render_page_thumbnail(plan, 1, assets, 420)
-    second = preview.render_page_thumbnail(plan, 1, assets, 420)
+    preview.clear_cache()
+    renderizacoes = 0
 
-    assert first is second
+    def contar():
+        nonlocal renderizacoes
+        renderizacoes += 1
+        return Documento("", "", True, Tipografia(), None, modo=plan.mode)
+
+    first = preview.render_page_thumbnail(plan, 1, assets, 420, document_factory=contar)
+    second = preview.render_page_thumbnail(plan, 1, assets, 420, document_factory=contar)
+
+    # A identidade não serve mais como prova do acerto: o cache é dono da imagem
+    # que guarda e devolve cópias, senão quem fechasse uma corromperia o cache.
+    assert renderizacoes == 1, "a segunda chamada tem de vir do cache"
+    assert first is not second
+    assert first.tobytes() == second.tobytes()
     assert first.size == (420, pytest.approx(420 / (297 / 210), abs=1))
 
 

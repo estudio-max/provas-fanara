@@ -186,6 +186,7 @@ class PreviewGrid(QFrame):
         self._zoom = 100
         self._laid_out_columns = 0
         self._pixmap_cache: OrderedDict[tuple[object, ...], QImage] = OrderedDict()
+        self._style_token: tuple[object, ...] = ()
         self._alternative_page_numbers: set[int] = set()
         self.pending_scroll_position = 0
         self.empty_message = "Escolher pasta para começar a montar o fotolivro."
@@ -330,6 +331,14 @@ class PreviewGrid(QFrame):
                 widget.deleteLater()
         self._cards.clear()
 
+    def set_style_token(self, token: object) -> None:
+        """Assume o estilo com que as próximas prévias foram renderizadas.
+
+        Sem isto a grade indexa as miniaturas só pelo plano e devolve a imagem
+        antiga quando muda apenas a aparência — fundo, sombra, marca d'água.
+        """
+        self._style_token = tuple(token) if isinstance(token, (tuple, list)) else (token,)
+
     def _cache_key(self, page: PagePlan) -> tuple[object, ...]:
         if self._plan is None:
             raise RuntimeError("Não há plano para indexar a prévia.")
@@ -339,6 +348,7 @@ class PreviewGrid(QFrame):
             page.number,
             page.template_id,
             page.photo_ids,
+            self._style_token,
         )
 
     def show_empty(self, message: str) -> None:

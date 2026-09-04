@@ -470,3 +470,35 @@ QToolTip {
     border: 1px solid #4A4B55;
     padding: 8px;
 }
+
+QDialog#welcomeDialog, QDialog#welcomeDialog QWidget {
+    background: #191A1F;
+}
+
+QLabel#welcomeTitle {
+    color: #F1F1F3;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+QLabel#welcomeStepNumber {
+    color: #C53252;
+    background: #23161B;
+    border: 1px solid #3A2028;
+    border-radius: 13px;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QFrame#welcomeFooter {
+    border-top: 1px solid #2C2D34;
+}
+
+QLabel#welcomeFinePrint {
+    color: #6E6E76;
+    font-size: 11px;
+}

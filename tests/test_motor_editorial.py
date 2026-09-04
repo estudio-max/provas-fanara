@@ -284,11 +284,17 @@ def test_classic_preview_exposes_effective_photo_and_exact_pdf_target(
     assert preview.classic_photo_target == (1473, 904)
 
 
-def test_classica_cover_fields_participate_in_the_render_fingerprint(tmp_path: Path):
+def test_classica_cover_fields_stay_out_of_the_render_fingerprint(tmp_path: Path):
+    """O enquadramento da capa não altera um pixel de página interna.
+
+    Estes campos estavam na assinatura e, a cada ajuste da capa, o aplicativo
+    descartava a miniatura de todas as páginas e redesenhava o livro inteiro
+    para atualizar uma imagem só.
+    """
     from provas import motor
 
     base = motor.Config(str(tmp_path))
-    baseline = motor._render_style_fingerprint(base, "fotolivro", 19)
+    baseline = motor.render_style_fingerprint(base, "fotolivro", 19)
     changes = {
         "foto_capa_id": "manual.jpg",
         "capa_foco_x": 0.2,
@@ -299,7 +305,7 @@ def test_classica_cover_fields_participate_in_the_render_fingerprint(tmp_path: P
 
     for field, value in changes.items():
         changed = motor.Config(**{**base.__dict__, field: value})
-        assert motor._render_style_fingerprint(changed, "fotolivro", 19) != baseline, field
+        assert motor.render_style_fingerprint(changed, "fotolivro", 19) == baseline, field
 
 
 def test_project_round_trip_preserves_curved_editorial_cover_style(tmp_path: Path):

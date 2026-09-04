@@ -99,7 +99,9 @@ def render_page_thumbnail(
     cached = _CACHE.get(key)
     if cached is not None:
         _CACHE.move_to_end(key)
-        return cached
+        # O cache é dono da imagem guardada. Quem chama pode fechá-la, e um
+        # acerto seguinte devolveria uma imagem fechada — então sai uma cópia.
+        return cached.copy()
 
     try:
         template = next(item for item in catalog() if item.id == page_plan.template_id)
@@ -121,7 +123,7 @@ def render_page_thumbnail(
     _CACHE.move_to_end(key)
     while len(_CACHE) > _CACHE_LIMIT:
         _CACHE.popitem(last=False)
-    return thumbnail
+    return thumbnail.copy()
 
 
 def clear_cache() -> None:

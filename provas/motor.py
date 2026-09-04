@@ -430,16 +430,16 @@ def ciclar_preview_pagina(
     if _cancelled(cancelar):
         raise Cancelado()
     cycled_plan = ciclar_pagina(plan, page_number, ratios)
-    cached_thumbnail = preview.render_page_thumbnail(
+    # `render_page_thumbnail` já devolve uma cópia; o cache nunca compartilha
+    # a imagem que guarda.
+    thumbnail = preview.render_page_thumbnail(
         cycled_plan,
         page_number,
         assets,
         preview_width,
         document_factory=lambda: _new_editorial_document(config, cycled_plan.mode),
-        style_fingerprint=_render_style_fingerprint(config, cycled_plan.mode, cycled_plan.seed),
+        style_fingerprint=render_style_fingerprint(config, cycled_plan.mode, cycled_plan.seed),
     )
-    # The preview cache owns its image; the Qt result must not share that mutable resource.
-    thumbnail = cached_thumbnail.copy()
     if _cancelled(cancelar):
         thumbnail.close()
         raise Cancelado()
@@ -502,8 +502,14 @@ def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
     return result
 
 
-def _render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[object, ...]:
-    """Describe every config input that can alter an internal rendered page."""
+def render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[object, ...]:
+    """Describe every config input that can alter an internal rendered page.
+
+    O que só desenha a capa fica de fora de propósito — `estilo_capa`,
+    `cor_fundo`, `subtitulo` e os campos de enquadramento da capa. Incluí-los
+    invalidava a miniatura de todas as páginas a cada troca de capa, e o
+    aplicativo redesenhava o livro inteiro para atualizar uma imagem só.
+    """
     logo_path = config.logo.strip()
     logo_state: tuple[object, ...] = (os.path.abspath(logo_path), None, None)
     if logo_path:
@@ -515,24 +521,18 @@ def _render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[obj
     return (
         mode,
         seed,
-        config.estilo_capa,
+        # Moldura da página: logotipo, estúdio, título e rodapé.
         config.titulo,
-        config.subtitulo,
         config.estudio,
         config.site,
-        config.cor_fundo,
+        logo_state,
+        # Corpo da página.
         config.fundo_paginas,
         config.sombra_fotos,
         config.qualidade,
         config.marca_dagua,
         config.marca_opacidade,
         config.marca_largura,
-        config.foto_capa_id,
-        config.capa_foco_x,
-        config.capa_foco_y,
-        config.capa_zoom,
-        config.capa_enquadramento,
-        logo_state,
     )
 
 
@@ -578,7 +578,7 @@ def gerar_preview(
         finally:
             cover_document.fechar()
     total = len(plan.pages) + len(thumbnails)
-    style_fingerprint = _render_style_fingerprint(config, plan.mode, plan.seed)
+    style_fingerprint = render_style_fingerprint(config, plan.mode, plan.seed)
     for index, page_plan in enumerate(plan.pages, start=1):
         offset = len(thumbnails)
         _avisar(progresso, offset + index - 1, max(1, total), "Renderizando prévia…", cancelar)

@@ -26,15 +26,16 @@ import subprocess
 import sys
 
 from empacotar import NOME, RAIZ, gerar_icone, remover_dados_usuario
+from provas.recursos import ORGANIZATION_NAME, VERSION
 
 # --- Partner Center → Identidade do produto -------------------------------
 IDENTIDADE = "EstudioFanara.FanaraFotolivro"   # "Nome do pacote"
 PUBLICADOR = "CN=Estudio Fanara"               # "Publicador" (vem como CN=<GUID>)
-NOME_PUBLICADOR = "Estúdio Fanara"             # "Nome de exibição do publicador"
+NOME_PUBLICADOR = ORGANIZATION_NAME            # "Nome de exibição do publicador"
 # --------------------------------------------------------------------------
 
-# A Store exige que o último número da versão seja 0. Acompanha a tag v1.0.0.
-VERSAO = "1.0.0.0"
+# A Store exige que o último número da versão seja 0; o resto vem da fonte única.
+VERSAO = f"{VERSION}.0"
 DESCRICAO = ("Mesa de edição para montar o fotolivro a partir da pasta do ensaio: "
              "analisa as fotografias, diagrama as páginas, monta a capa e exporta o "
              "PDF. Serve tanto para a prova de seleção, com marca d'água e códigos, "

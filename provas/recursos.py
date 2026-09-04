@@ -3,9 +3,16 @@ from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
+import json
 import sys
 
 PRODUCT_NAME = "Fanara - Fotolivro"
+# Fonte única da versão: os empacotadores e a tela de boas-vindas leem daqui.
+# A Store guarda cada versão numa URL própria, então incremente a cada envio.
+VERSION = "1.0.1"
+ORGANIZATION_NAME = "Estúdio Fanara"
+COPYRIGHT = "© 2026 Estúdio Fanara"
+MANIFEST_NAME = "BUILD-MANIFEST.json"
 _SOURCE_SHA256 = "238ab90b9ad95451b1f888b864e4b6880cddafbfebf6d9ef20f711e3f6fcbe5c"
 _BRAND_RGB = (218, 66, 101)
 _ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
@@ -18,6 +25,24 @@ def caminho(nome: str) -> Path:
     """Resolve um ativo em código-fonte ou no diretório temporário do PyInstaller."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
     return base / "assets" / nome
+
+
+def identificacao_da_build() -> str:
+    """Versão e commit, para a linha discreta da tela de boas-vindas.
+
+    O manifesto só existe no aplicativo empacotado: rodando do código-fonte não
+    há commit a mostrar, e a linha sai apenas com a versão.
+    """
+    if getattr(sys, "frozen", False):
+        manifesto = Path(sys.executable).resolve().parent / MANIFEST_NAME
+        try:
+            commit = json.loads(manifesto.read_text(encoding="utf-8"))["git_commit"]
+        except (OSError, ValueError, KeyError):
+            pass
+        else:
+            if isinstance(commit, str) and commit:
+                return f"Versão {VERSION} · build {commit[:7]}"
+    return f"Versão {VERSION} · desenvolvimento"
 
 
 def _brand_bounds(image: Image.Image) -> tuple[int, int, int, int]:

@@ -237,11 +237,16 @@ def test_cli_aceita_capa_curva_com_identidade_completa(tmp_path: Path, image_fac
     assert {chave: payload["config"][chave] for chave in esperado} == esperado
 
 
-def test_cli_documenta_apenas_os_dois_estilos_de_capa_suportados():
+def test_cli_documenta_os_tres_estilos_de_capa_suportados():
+    """A ajuda lista o que `capas.COVER_STYLES` aceita — e nada além disso.
+
+    `classica` sempre foi válido e é o padrão da interface, mas ficava escondido
+    do `--help`. Os estilos removidos não podem reaparecer.
+    """
     result = executar("--help")
 
     assert result.returncode == 0
-    assert "--capa {mosaico,curvas_editoriais}" in result.stdout
+    assert "--capa {classica,mosaico,curvas_editoriais}" in result.stdout
     assert "losango" not in result.stdout
     assert "destaque" not in result.stdout
 
