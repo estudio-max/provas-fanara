@@ -30,8 +30,20 @@ DEPENDENCIAS = (
 RECURSOS_OFICIAIS = {
     "fanara-symbol.png": "a6771c2caa80614f1223e4a158c114dc4cf573005df774539494492b5eba7ae4",
     "icone.ico": "5931ba87d2947ba6362a8c1e08a5b84c64ea00274040221ad354c6f3944dd2a2",
+    "fonts/BebasNeue-Regular.ttf": "08e4623805102d819f58601e46e345648846075e363b2ceb23313c2d1c83ec73",
     "fonts/BodoniModa[opsz,wght].ttf": "550f5e34ee0a828d7941b1fe9bc58b34e5260d3f33a61532e6d0a0114e79a5cf",
+    "fonts/CrimsonText-Regular.ttf": "48e6c5d5ad1d01599d374ecb817e15890d1feb3b8a3a88e527d44c90389e1f06",
+    "fonts/CrimsonText-SemiBold.ttf": "802e84000740fec2a9fbe0ae09b6b6811bd86a78a0173b15d44450a1530e9410",
+    "fonts/Lato-Light.ttf": "cf2a774503baf418d584f49967bd160e1e03f087c13b25602f28024ec7788f08",
+    "fonts/Montserrat-Bold.ttf": "5a491022018fd3965df4c071a581b055971e5be605b6df79d7ab03437a10234e",
+    "fonts/Montserrat-Light.ttf": "a30a5d096ee32d9e4d7952daee4807e726b5201bea5d9951f0fb5a8619388555",
+    "fonts/OFL-BebasNeue.txt": "72082f6cb4d04be2ecf7cc7d9e1e7d73787f0af8a5a278a47cade70c16b78341",
     "fonts/OFL-BodoniModa.txt": "97e32fdfa86a9aa79b85ce20b63b8618a8bf3e1110a0e631fac7f73983417b55",
+    "fonts/OFL-CrimsonText.txt": "50fd67cddc097377a5c871e8452b778bc5aedfa3480a705cb27c5e3a078218df",
+    "fonts/OFL-Lato.txt": "74ba064d03f1f1c4a952da936c3eb71866c34404916734de3cae73b34357e59e",
+    "fonts/OFL-Montserrat.txt": "8b7141c03fa4f8d44e6345d5d4931709290f0f67875e452e95ac1fd3a027802e",
+    "fonts/OFL-PlayfairDisplay.txt": "566be814f8e96e93dfa16101331557eb6b5467e9e03f627c0910fe93ca12300e",
+    "fonts/PlayfairDisplay-BoldItalic.ttf": "ea85e419850d4db534e2ffcfaa2edb7fe1a85e13186e6dc5b569d7a83231ac8c",
 }
 
 
@@ -123,6 +135,19 @@ def diagnosticar_fontes() -> int:
         linha(AVISO, f"{embutidas} de 4 papéis sem fonte do sistema; o PDF continua legível.")
     else:
         linha(OK, "todos os papéis com fonte do sistema")
+
+    # As capas editoriais têm tipografia própria, empacotada. Sem ela a capa sai
+    # com outra métrica e outro desenho — só se percebe olhando o PDF pronto.
+    try:
+        from provas.tipografia_capas import familias_ausentes
+    except Exception as erro:
+        linha(AVISO, f"não foi possível conferir as fontes das capas: {erro}")
+        return 0
+    ausentes = familias_ausentes()
+    if ausentes:
+        linha(AVISO, f"capas sem tipografia própria: {', '.join(ausentes)}")
+    else:
+        linha(OK, "capas editoriais com a tipografia especificada")
     return 0
 
 

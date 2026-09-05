@@ -70,8 +70,10 @@ def dados_pyinstaller() -> list[str]:
     official_data = (
         (os.path.join(RAIZ, "assets", "fanara-symbol.png"), "assets"),
         (os.path.join(RAIZ, "assets", "icone.ico"), "assets"),
-        (os.path.join(RAIZ, "assets", "fonts", "BodoniModa[opsz,wght].ttf"), "assets/fonts"),
-        (os.path.join(RAIZ, "assets", "fonts", "OFL-BodoniModa.txt"), "assets/fonts"),
+        *(
+            (caminho, "assets/fonts")
+            for caminho in sorted(glob.glob(os.path.join(RAIZ, "assets", "fonts", "*")))
+        ),
         *(
             (caminho, "assets/passo-a-passo")
             for caminho in sorted(glob.glob(os.path.join(RAIZ, "assets", "passo-a-passo", "*.jpg")))
@@ -124,9 +126,14 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         "cascade Haar": lambda name: name.endswith("/cv2/data/haarcascade_frontalface_default.xml"),
         "símbolo Fanara": lambda name: name == f"{prefixo_interno}assets/fanara-symbol.png",
         "ícone Fanara": lambda name: name == f"{prefixo_interno}assets/icone.ico",
-        "Bodoni Moda": lambda name: name == f"{prefixo_interno}assets/fonts/bodonimoda[opsz,wght].ttf",
-        "licença OFL": lambda name: name == f"{prefixo_interno}assets/fonts/ofl-bodonimoda.txt",
     }
+    # Fonte faltando não quebra nada: a capa sai com a substituta do sistema, com
+    # outra métrica e outro desenho. Só se percebe olhando o PDF, então é aqui.
+    for fonte in sorted(glob.glob(os.path.join(RAIZ, "assets", "fonts", "*"))):
+        interno = f"{prefixo_interno}assets/fonts/{os.path.basename(fonte).lower()}"
+        ativos[os.path.basename(fonte)] = (
+            lambda name, alvo=interno: name == alvo
+        )
     for rotulo, presente in ativos.items():
         if not any(presente(name) for name in minusculos):
             problemas.append(f"ativo obrigatório ausente: {rotulo}")
@@ -182,11 +189,12 @@ def _fontes_do_pacote() -> tuple[Path, ...]:
         root / name for name in (
             "pyproject.toml", "provas_cli.py", "Provas.pyw", "verificar.py", "empacotar.py",
             "assets/fanara-symbol-source.png", "assets/fanara-symbol.png", "assets/icone.ico",
-            "assets/fonts/BodoniModa[opsz,wght].ttf", "assets/fonts/OFL-BodoniModa.txt",
         )
     )
+    fontes = tuple(sorted(Path(RAIZ, "assets", "fonts").iterdir()))
     package = tuple(path for path in (root / "provas").rglob("*") if path.suffix in {".py", ".qss"})
-    return tuple(sorted((*fixed, *package), key=lambda path: path.relative_to(root).as_posix()))
+    return tuple(sorted((*fixed, *fontes, *package),
+                        key=lambda path: path.relative_to(root).as_posix()))
 
 
 def fingerprint_fontes() -> str:

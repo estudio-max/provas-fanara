@@ -86,6 +86,46 @@ def _quebrar(
     return linhas
 
 
+def _entrelinha(fonte: ImageFont.ImageFont, fator: float) -> int:
+    """Avanço de linha: o fator do estilo, mas nunca menos do que a fonte pede.
+
+    Bodoni e Playfair têm ascendente e descendente maiores que o corpo. Um fator
+    afinado com uma substituta mais estreita fazia a linha seguinte pousar em
+    cima da anterior — e o subtítulo, sobre a última linha do título.
+    """
+    ascendente, descendente = fonte.getmetrics()
+    return max(round(fonte.size * fator), ascendente + descendente)
+
+
+def _tira_girada(
+    texto: str,
+    origem: tema.Fonte,
+    corpo: int,
+    limite: int,
+    cor: tuple[int, int, int],
+    entreletra: float,
+    graus: int,
+) -> Image.Image:
+    """Título na vertical, com o corpo cedendo até caber na altura disponível.
+
+    Com corpo fixo, uma fonte mais larga que a substituta passava do rodapé e o
+    fim do título sumia fora da capa.
+    """
+    regua = ImageDraw.Draw(Image.new("L", (1, 1)))
+    corpo = max(1, corpo)
+    while True:
+        fonte = _fonte(origem, corpo)
+        comprimento = round(regua.textlength(texto, font=fonte)
+                            + corpo * entreletra * max(0, len(texto) - 1))
+        if comprimento <= limite or corpo <= 8:
+            break
+        corpo = round(corpo * 0.94)
+    tira = Image.new("RGBA", (max(1, comprimento + corpo), _entrelinha(fonte, 1.5)),
+                     (0, 0, 0, 0))
+    _escrever(ImageDraw.Draw(tira), texto, fonte, (0, 0), cor, entreletra)
+    return tira.rotate(graus, expand=True)
+
+
 def _encaixar(
     desenho: ImageDraw.ImageDraw,
     texto: str,
@@ -167,7 +207,7 @@ def jornada(
         desenho, titulo, tipografia.titulo, _pt(40, altura), coluna,
         tipografia.titulo_entreletra,
     )
-    entrelinha = round(fonte_titulo.size * 1.16)
+    entrelinha = _entrelinha(fonte_titulo, 1.16)
     # O bloco fica na metade inferior da coluna, como no guia: o alto respira.
     y = round(altura * 0.52) - (len(linhas) - 1) * entrelinha
     for linha in linhas:
@@ -181,7 +221,7 @@ def jornada(
         y += round(fonte_titulo.size * 0.55)
         for linha in _quebrar(desenho, subtitulo, fonte_sub, coluna):
             _escrever(desenho, linha, fonte_sub, (margem, y), (92, 94, 102))
-            y += round(fonte_sub.size * 1.35)
+            y += _entrelinha(fonte_sub, 1.35)
 
     return Composta(tela)
 
@@ -256,7 +296,7 @@ def toscana(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Com
         comprimento = desenho.textlength(linha, font=fonte)
         _escrever(desenho, linha, fonte, (round((largura - comprimento) / 2), y), tinta,
                   tipografia.titulo_entreletra)
-        y += round(fonte.size * 1.14)
+        y += _entrelinha(fonte, 1.14)
 
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(15, altura))
@@ -265,7 +305,7 @@ def toscana(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Com
             comprimento = desenho.textlength(linha, font=fonte_sub)
             _escrever(desenho, linha, fonte_sub,
                       (round((largura - comprimento) / 2), y), (104, 100, 94))
-            y += round(fonte_sub.size * 1.3)
+            y += _entrelinha(fonte_sub, 1.3)
     return Composta(tela)
 
 
@@ -283,27 +323,33 @@ def neon(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Compos
          clara=False, direcao="cima")
 
     texto = (titulo or "").strip().upper()
-    partes = texto.split(" ", 1)
-    vertical, horizontal = (partes[0], partes[1]) if len(partes) == 2 else (texto, "")
+    palavras = texto.split(" ")
+    # Um artigo sozinho na tira vertical vira um borrão de uma letra: junta
+    # palavras até a tira carregar algo que se leia como palavra.
+    corte = 1
+    while corte < len(palavras) and len(" ".join(palavras[:corte])) < 4:
+        corte += 1
+    vertical, horizontal = " ".join(palavras[:corte]), " ".join(palavras[corte:])
 
     # O título vertical é desenhado numa tira própria e girado: o Pillow não
     # escreve em ângulo, e girar a tela inteira estragaria a fotografia.
+    margem_tira = round(altura * 0.06)
+    girada = _tira_girada(vertical, tipografia.titulo, _pt(56, altura),
+                          altura - 2 * margem_tira, claro,
+                          tipografia.titulo_entreletra, 90)
+    tela.paste(girada, (largura - faixa + round(faixa * 0.12), margem_tira), girada)
+
     corpo = _pt(56, altura)
     fonte = _fonte(tipografia.titulo, corpo)
-    comprimento = round(desenho.textlength(vertical, font=fonte)
-                        + corpo * tipografia.titulo_entreletra * len(vertical))
-    tira = Image.new("RGBA", (max(1, comprimento + corpo), round(corpo * 1.5)), (0, 0, 0, 0))
-    _escrever(ImageDraw.Draw(tira), vertical, fonte, (0, 0), claro,
-              tipografia.titulo_entreletra)
-    girada = tira.rotate(90, expand=True)
-    tela.paste(girada, (largura - faixa + round(faixa * 0.12),
-                        round(altura * 0.06)), girada)
-
     y = altura - round(base * 0.78)
     if horizontal:
-        _escrever(desenho, horizontal, fonte, (round(largura * 0.045), y), claro,
-                  tipografia.titulo_entreletra)
-        y += round(corpo * 1.05)
+        fonte, linhas = _encaixar(desenho, horizontal, tipografia.titulo, corpo,
+                                  largura - faixa - round(largura * 0.09),
+                                  tipografia.titulo_entreletra)
+        for linha in linhas:
+            _escrever(desenho, linha, fonte, (round(largura * 0.045), y), claro,
+                      tipografia.titulo_entreletra)
+            y += _entrelinha(fonte, 1.05)
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(14, altura))
         _escrever(desenho, subtitulo.strip(), fonte_sub,
@@ -341,14 +387,14 @@ def fluir(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Compo
     for linha in linhas:
         _escrever(desenho, linha, fonte, (x, y), (252, 252, 253),
                   tipografia.titulo_entreletra)
-        y += round(fonte.size * 1.1)
+        y += _entrelinha(fonte, 1.1)
 
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(14, altura))
         y += round(fonte.size * 0.34)
         for linha in _quebrar(desenho, subtitulo.strip(), fonte_sub, limite):
             _escrever(desenho, linha, fonte_sub, (x, y), (236, 236, 240))
-            y += round(fonte_sub.size * 1.38)
+            y += _entrelinha(fonte_sub, 1.38)
     return Composta(tela)
 
 
@@ -397,7 +443,7 @@ def ritmos(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Com
         comprimento = desenho.textlength(linha, font=fonte)
         _escrever(desenho, linha, fonte, (round((largura - comprimento) / 2), y), tinta,
                   tipografia.titulo_entreletra)
-        y += round(fonte.size * 1.14)
+        y += _entrelinha(fonte, 1.14)
 
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(14, altura))
@@ -445,14 +491,14 @@ def fragmentos(fotos, largura, altura, titulo, subtitulo="", tipografia=None) ->
     y = round(altura * 0.14)
     for linha in linhas:
         _escrever(desenho, linha, fonte, (x, y), tinta, tipografia.titulo_entreletra)
-        y += round(fonte.size * 1.12)
+        y += _entrelinha(fonte, 1.12)
 
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(16, altura))
         y += round(fonte.size * 0.3)
         for linha in _quebrar(desenho, subtitulo.strip(), fonte_sub, limite):
             _escrever(desenho, linha, fonte_sub, (x, y), (108, 104, 98))
-            y += round(fonte_sub.size * 1.32)
+            y += _entrelinha(fonte_sub, 1.32)
     return Composta(tela)
 
 
@@ -486,27 +532,27 @@ def contrastes(fotos, largura, altura, titulo, subtitulo="", tipografia=None) ->
     desenho = ImageDraw.Draw(tela)
     tinta = (24, 25, 28)
     texto = (titulo or "").strip().upper()
-    corpo = _pt(56, altura)
-    fonte = _fonte(tipografia.titulo, corpo)
-    comprimento = round(desenho.textlength(texto, font=fonte)
-                        + corpo * tipografia.titulo_entreletra * max(0, len(texto) - 1))
-    tira = Image.new("RGBA", (max(1, comprimento + corpo), round(corpo * 1.5)), (0, 0, 0, 0))
-    _escrever(ImageDraw.Draw(tira), texto, fonte, (0, 0), tinta,
-              tipografia.titulo_entreletra)
-    girada = tira.rotate(270, expand=True)
-    tela.paste(girada, (largura - faixa_texto + round(faixa_texto * 0.1), margem), girada)
+    # O subtítulo divide a faixa com o título: mede-se primeiro, para o título
+    # ceder corpo em vez de descer por cima dele.
+    x_faixa = largura - faixa_texto + round(faixa_texto * 0.1)
+    fonte_sub = _fonte(tipografia.subtitulo, _pt(13, altura))
+    linhas_sub = (_quebrar(desenho, subtitulo.strip(), fonte_sub,
+                           faixa_texto - round(faixa_texto * 0.2))
+                  if (subtitulo or "").strip() else [])
+    pe = sum(_entrelinha(fonte_sub, 1.3) for _ in linhas_sub)
+    if pe:
+        pe += round(altura * 0.03)
 
-    if (subtitulo or "").strip():
-        # Na faixa de texto, ao pé do título vertical: sobre as fotos ele
-        # ficava ilegível e cortado.
-        fonte_sub = _fonte(tipografia.subtitulo, _pt(13, altura))
-        limite = faixa_texto - round(faixa_texto * 0.2)
-        linhas = _quebrar(desenho, subtitulo.strip(), fonte_sub, limite)
-        y = altura - margem - round(fonte_sub.size * 1.3 * len(linhas))
-        for linha in linhas:
-            _escrever(desenho, linha, fonte_sub,
-                      (largura - faixa_texto + round(faixa_texto * 0.1), y), (58, 59, 64))
-            y += round(fonte_sub.size * 1.3)
+    girada = _tira_girada(texto, tipografia.titulo, _pt(56, altura),
+                          altura - 2 * margem - pe, tinta,
+                          tipografia.titulo_entreletra, 270)
+    tela.paste(girada, (x_faixa, margem), girada)
+
+    # Ao pé do título vertical: sobre as fotos ele ficava ilegível e cortado.
+    y = altura - margem - sum(_entrelinha(fonte_sub, 1.3) for _ in linhas_sub)
+    for linha in linhas_sub:
+        _escrever(desenho, linha, fonte_sub, (x_faixa, y), (58, 59, 64))
+        y += _entrelinha(fonte_sub, 1.3)
     return Composta(tela)
 
 
@@ -542,7 +588,7 @@ def caminho(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Co
         comprimento = desenho.textlength(linha, font=fonte)
         _escrever(desenho, linha, fonte, (round((largura - comprimento) / 2), y), tinta,
                   tipografia.titulo_entreletra)
-        y += round(fonte.size * 1.12)
+        y += _entrelinha(fonte, 1.12)
 
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(18, altura))
@@ -551,7 +597,7 @@ def caminho(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Co
             comprimento = desenho.textlength(linha, font=fonte_sub)
             _escrever(desenho, linha, fonte_sub,
                       (round((largura - comprimento) / 2), y), (96, 90, 82))
-            y += round(fonte_sub.size * 1.3)
+            y += _entrelinha(fonte_sub, 1.3)
     return Composta(tela)
 
 

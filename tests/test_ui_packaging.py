@@ -276,11 +276,12 @@ def test_inspecao_do_zip_exige_ativos_e_rejeita_dados_do_usuario(tmp_path: Path)
             f"{PRODUCT_NAME}/_internal/cv2/data/haarcascade_frontalface_default.xml",
         ):
             archive.writestr(name, b"ok")
+        # Toda fonte empacotada é exigida: uma faltando faz a capa sair com a
+        # substituta do sistema, o que só se percebe olhando o PDF pronto.
         for asset in (
             ROOT / "assets" / "fanara-symbol.png",
             ROOT / "assets" / "icone.ico",
-            ROOT / "assets" / "fonts" / "BodoniModa[opsz,wght].ttf",
-            ROOT / "assets" / "fonts" / "OFL-BodoniModa.txt",
+            *sorted((ROOT / "assets" / "fonts").iterdir()),
         ):
             archive.writestr(f"{PRODUCT_NAME}/_internal/{asset.relative_to(ROOT).as_posix()}", asset.read_bytes())
 
