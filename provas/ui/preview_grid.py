@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -206,6 +207,21 @@ class PreviewGrid(QFrame):
         title.setObjectName("panelTitle")
         title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         bar.addWidget(title)
+
+        # Indicador de trabalho, ao lado do que está sendo refeito. A barra
+        # indeterminada do Qt evita desenhar um girador à mão.
+        self.busy_bar = QProgressBar()
+        self.busy_bar.setObjectName("previewBusyBar")
+        self.busy_bar.setRange(0, 0)
+        self.busy_bar.setTextVisible(False)
+        self.busy_bar.setFixedSize(104, 6)
+        self.busy_label = QLabel()
+        self.busy_label.setObjectName("previewBusyLabel")
+        for widget in (self.busy_bar, self.busy_label):
+            widget.setVisible(False)
+            bar.addSpacing(4)
+            bar.addWidget(widget)
+
         bar.addStretch(1)
 
         self.undo_button = QPushButton("Desfazer")
@@ -369,6 +385,12 @@ class PreviewGrid(QFrame):
         layout.addWidget(heading)
         layout.addWidget(copy)
         self.grid.addWidget(empty, 0, 0, 1, 1, Qt.AlignmentFlag.AlignCenter)
+
+    def set_busy(self, busy: bool, message: str = "") -> None:
+        """Mostra que a prévia está sendo refeita, sem apagar o que já está na tela."""
+        self.busy_label.setText(message)
+        self.busy_bar.setVisible(busy)
+        self.busy_label.setVisible(busy and bool(message))
 
     def show_loading(self, message: str = "Preparando as páginas…") -> None:
         self._clear_grid()

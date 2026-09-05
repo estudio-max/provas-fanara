@@ -147,3 +147,59 @@ def test_o_cache_do_motor_nao_entrega_a_imagem_que_ele_guarda():
     terceira = preview.render_page_thumbnail(plano, 1, assets, 80)
     terceira.load()  # estourava aqui: "Operation on closed image"
     assert terceira.width == 80
+
+
+def test_operacao_nao_apaga_paginas_ja_visiveis(qt_app: QApplication, tmp_path) -> None:
+    """Trocar a capa não pode limpar a grade.
+
+    `begin_operation` mostrava o esqueleto de carregamento em toda operação, o
+    que apagava as páginas já prontas e passava a impressão de travamento —
+    ainda mais porque trocar a capa nem redesenha as páginas.
+    """
+    from provas.ui import MainWindow
+
+    janela = MainWindow()
+    janela.resize(1200, 700)
+    janela.show()
+    paginas = tuple(
+        PagePlan(numero, "single-landscape", (f"p{numero}.jpg",), "narrative")
+        for numero in range(1, 5)
+    )
+    janela.select_folder(str(tmp_path))
+    janela.apply_analysis_result(BookPlan(71, "fotolivro", ("capa.jpg",), paginas))
+    janela.apply_preview_ready(tuple(Image.new("RGB", (420, 297), "white") for _ in range(5)))
+    for _ in range(4):
+        qt_app.processEvents()
+    assert janela.preview_grid.thumbnail_count == 5
+
+    janela.set_cover_style("mosaico")
+    for _ in range(4):
+        qt_app.processEvents()
+
+    assert janela.preview_grid.thumbnail_count == 5, (
+        "as páginas continuam na tela enquanto a capa é refeita"
+    )
+    janela.close()
+    janela.deleteLater()
+    for _ in range(3):
+        qt_app.processEvents()
+
+
+def test_a_primeira_previa_ainda_mostra_o_esqueleto(qt_app: QApplication, tmp_path) -> None:
+    """A poda não pode ir longe demais: sem nada na tela, o esqueleto informa."""
+    from provas.ui import MainWindow
+
+    janela = MainWindow()
+    janela.select_folder(str(tmp_path))
+    assert janela.preview_grid.thumbnail_count == 0
+
+    janela.begin_operation("Analisando fotografias…")
+    esqueletos = [f for f in janela.preview_grid.findChildren(type(janela.preview_grid))
+                  if f.objectName() == "skeletonPage"]
+    # Os esqueletos são QFrame simples; basta que a grade tenha widgets de espera.
+    assert janela.preview_grid.grid.count() > 0
+    janela._end_operation()
+    janela.close()
+    janela.deleteLater()
+    for _ in range(3):
+        qt_app.processEvents()

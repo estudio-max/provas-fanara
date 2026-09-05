@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from PIL import Image, UnidentifiedImageError
-from PySide6.QtCore import QFile, QIODevice, QThread, QTimer, Qt
+from PySide6.QtCore import QFile, QIODevice, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -46,6 +46,10 @@ from .workers import AnalysisWorker, EditorialWorker, ExportWorker, PageCycleWor
 
 class MainWindow(QMainWindow):
     """Editing desk that orchestrates motor APIs without owning editorial logic."""
+
+    #: Emitido a cada mudança de estado do projeto — pasta, plano, prévia, ocupado.
+    #: O passo a passo escuta isto para saber quando uma etapa terminou.
+    estado_mudou = Signal()
 
     DIAGNOSTICS_BREAKPOINT = 1180
 
@@ -463,7 +467,12 @@ class MainWindow(QMainWindow):
         self._cancel_event = cancel_event or threading.Event()
         self.sidebar.progress_bar.setValue(0)
         self.sidebar.set_busy(True, label)
-        self.preview_grid.show_loading(label)
+        # O esqueleto só faz sentido quando não há nada na tela. Com páginas já
+        # visíveis, apagá-las para mostrar quatro retângulos cinzas parece que o
+        # trabalho se perdeu — e trocar a capa não toca nas páginas.
+        if not self.preview_grid.thumbnail_count:
+            self.preview_grid.show_loading(label)
+        self.preview_grid.set_busy(True, label)
         self.set_status(label, "loading")
         self._sync_actions()
 
@@ -493,6 +502,7 @@ class MainWindow(QMainWindow):
         self.is_busy = False
         self._cancel_event = None
         self.sidebar.set_busy(False)
+        self.preview_grid.set_busy(False)
         self._sync_actions()
 
     def request_analysis(self) -> None:
@@ -762,6 +772,7 @@ class MainWindow(QMainWindow):
         self.is_busy = False
         self._cancel_event = None
         self.sidebar.set_busy(False)
+        self.preview_grid.set_busy(False)
         self._sync_actions()
         identity, self._deferred_cover_identity = self._deferred_cover_identity, None
         appearance, self._deferred_page_appearance = self._deferred_page_appearance, None
@@ -1167,6 +1178,7 @@ class MainWindow(QMainWindow):
         )
         self.save_button.setEnabled(bool(has_plan and not self.is_busy))
         self.export_button.setEnabled(bool(preview_ready and not self.is_busy))
+        self.estado_mudou.emit()
 
     def _start_worker(
         self,
