@@ -913,3 +913,101 @@ def test_page_cycle_honors_cancellation_before_opening_any_photo(
             motor.Config(str(tmp_path), modo="prova"), plan, 2, 420, cancelar=cancelled,
         )
     assert opened == []
+
+
+def test_mudar_so_a_identidade_nao_reprepara_as_fotografias(tmp_path, image_factory, monkeypatch):
+    """Preparar as fotos custa segundos; título e site não mudam nenhuma delas.
+
+    Sem isto, cada pausa na digitação relia a pasta, reanalisava nitidez e
+    exposição e recodificava todas as imagens — o que tornava os campos de
+    identidade praticamente impossíveis de preencher numa sessão grande.
+    """
+    from dataclasses import replace
+
+    from provas import motor
+
+    for indice in range(4):
+        image_factory(f"foto-{indice}.jpg", size=(300, 450))
+    motor.limpar_cache_de_ativos()
+    config = motor.Config(str(tmp_path), titulo="A", estudio="Estúdio", site="a.com.br",
+                          qualidade="leve", semente=3).com_padroes()
+    plano = motor.analisar_plano(config).plan
+
+    preparos = []
+    original = motor._analisar_config
+    monkeypatch.setattr(
+        motor, "_analisar_config",
+        lambda *args, **kwargs: (preparos.append(1), original(*args, **kwargs))[1],
+    )
+
+    motor.gerar_preview(config, plano, width=200)
+    assert len(preparos) == 1, "a primeira prévia precisa preparar as fotos"
+
+    for campo, valor in (("titulo", "Outro"), ("site", "outro.com.br"),
+                         ("estilo_capa", "jornada"), ("subtitulo", "hoje")):
+        motor.gerar_preview(replace(config, **{campo: valor}), plano, width=200)
+        assert len(preparos) == 1, f"{campo} não muda foto nenhuma e repreparou tudo"
+
+    # A marca d'água é gravada nos pixels: mudar o estúdio muda cada fotografia.
+    motor.gerar_preview(replace(config, estudio="Outro"), plano, width=200)
+    assert len(preparos) == 2, "trocar o estúdio muda a marca d'água e exige repreparar"
+
+
+def test_foto_substituida_na_pasta_invalida_as_fotos_preparadas(tmp_path, image_factory):
+    """Cache que não vê o arquivo mudar entrega imagem velha, que é pior que lento."""
+    from provas import motor
+
+    caminho = image_factory("foto.jpg", size=(300, 450))
+    image_factory("outra.jpg", size=(300, 450))
+    motor.limpar_cache_de_ativos()
+    config = motor.Config(str(tmp_path), qualidade="leve", semente=3).com_padroes()
+    plano = motor.analisar_plano(config).plan
+    antes = motor._prepare_render_assets(config, plano)[0]
+    chaves_antes = {pid: bytes(ativo.jpeg) for pid, ativo in antes.items()}
+
+    Image.new("RGB", (300, 450), (10, 200, 40)).save(caminho)
+    os.utime(caminho, (os.stat(caminho).st_atime, os.stat(caminho).st_mtime + 5))
+    depois = motor._prepare_render_assets(config, plano)[0]
+
+    alvo = str(caminho)
+    assert alvo in depois
+    assert bytes(depois[alvo].jpeg) != chaves_antes[alvo], "entregou a foto antiga"
+
+
+@pytest.mark.parametrize("estilo", ["fluir", "toscana", "neon", "jornada"])
+def test_capa_editorial_recebe_a_resolucao_que_vai_ser_impressa(estilo, tmp_path, image_factory, monkeypatch):
+    """A capa saía borrada: a foto vinha reduzida a 320px e era ampliada 5x.
+
+    320px serve ao mosaico, que monta ladrilhos pequenos. Estes estilos usam a
+    fotografia grande — em `fluir` ela ocupa a capa inteira.
+    """
+    from provas import capas, motor
+
+    for indice in range(3):
+        image_factory(f"foto-{indice}.jpg", size=(1600, 2400))
+    motor.limpar_cache_de_ativos()
+    config = motor.Config(str(tmp_path), estilo_capa=estilo, titulo="T", estudio="E",
+                          site="e.com.br", modo="fotolivro", marca_dagua=False,
+                          mostrar_codigos=False, qualidade="leve", semente=5).com_padroes()
+    plano = motor.analisar_plano(config).plan
+
+    recebidas: list[tuple[int, int]] = []
+    original = capas.gerar
+
+    def espiar(nome, miniaturas, largura, altura, *args, **kwargs):
+        recebidas.extend(
+            (item.image if hasattr(item, "image") else item).size for item in miniaturas
+        )
+        recebidas.append(("alvo", largura, altura))
+        return original(nome, miniaturas, largura, altura, *args, **kwargs)
+
+    monkeypatch.setattr(motor.capas, "gerar", espiar)
+    motor.gerar_preview(config, plano, width=200)
+
+    alvo = next(item for item in recebidas if item[0] == "alvo")
+    tamanhos = [item for item in recebidas if item[0] != "alvo"]
+    assert tamanhos, "a capa editorial precisa receber alguma fotografia"
+    for largura, altura in tamanhos:
+        assert max(largura, altura) >= max(alvo[1], alvo[2]), (
+            f"{estilo} recebeu {largura}x{altura} para uma capa {alvo[1]}x{alvo[2]}"
+        )

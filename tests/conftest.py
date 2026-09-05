@@ -48,3 +48,22 @@ def photo_factory(image_factory: Callable[..., Path]):
         return Foto(str(path), path.stem)
 
     return create
+
+
+@pytest.fixture(autouse=True)
+def _limpar_caches_do_motor():
+    """As fotos preparadas e as miniaturas vivem em cache de módulo.
+
+    Sem limpar entre testes, um teste enxerga a sessão do anterior e passa (ou
+    falha) por motivo errado.
+    """
+    from provas import motor, preview
+    from provas.capas import _classic_face_safe_lembrado
+
+    motor.limpar_cache_de_ativos()
+    preview.clear_cache()
+    _classic_face_safe_lembrado.cache_clear()
+    yield
+    motor.limpar_cache_de_ativos()
+    preview.clear_cache()
+    _classic_face_safe_lembrado.cache_clear()

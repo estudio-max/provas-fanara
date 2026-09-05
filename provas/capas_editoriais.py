@@ -83,7 +83,32 @@ def _quebrar(
             linhas.append(atual)
             atual = palavra
     linhas.append(atual)
-    return linhas
+
+    # Um endereço de site é uma palavra só e pode ser mais largo que a coluna.
+    # Sem partir, ele saía pela borda da capa — o que é pior que partir feio.
+    inteiras: list[str] = []
+    for linha in linhas:
+        while largura(linha) > limite and len(linha) > 1:
+            corte = len(linha) - 1
+            while corte > 1 and largura(linha[:corte]) > limite:
+                corte -= 1
+            inteiras.append(linha[:corte])
+            linha = linha[corte:]
+        inteiras.append(linha)
+    return inteiras
+
+
+def _apoio(subtitulo: str, credito: str) -> str:
+    """Junta subtítulo e crédito numa linha só de apoio.
+
+    O fotógrafo e o site precisam aparecer em toda capa — é a assinatura do
+    trabalho. As capas editoriais desenham a própria tipografia, então não
+    recebem o bloco de identidade que o motor põe nas outras: o crédito entra
+    aqui, na linha que cada estilo já sabe posicionar e colorir. Campo vazio
+    simplesmente não aparece, e sem nenhum deles não sobra linha alguma.
+    """
+    partes = [parte for parte in ((subtitulo or "").strip(), (credito or "").strip()) if parte]
+    return " · ".join(partes)
 
 
 def _entrelinha(fonte: ImageFont.ImageFont, fator: float) -> int:
@@ -176,6 +201,7 @@ def jornada(
     altura: int,
     titulo: str,
     subtitulo: str = "",
+    credito: str = "",
     tipografia: ParTipografico | None = None,
 ) -> Composta:
     """Minimalismo e espaço: foto à direita em 2/3, texto na coluna esquerda.
@@ -186,6 +212,7 @@ def jornada(
     if largura <= 0 or altura <= 0:
         raise ValueError("A capa precisa ter medidas positivas.")
     tipografia = tipografia or par("geometrico")
+    subtitulo = _apoio(subtitulo, credito)
 
     fundo = (250, 249, 247)
     tinta = (26, 27, 31)
@@ -267,9 +294,10 @@ def _veu(tela: Image.Image, caixa: tuple[int, int, int, int], forca: float,
     tela.paste(faixa, (esquerda, topo), mascara)
 
 
-def toscana(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def toscana(foto, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Passpartout: foto centralizada com margens amplas sobre creme, texto abaixo."""
     tipografia = tipografia or par("editorial")
+    subtitulo = _apoio(subtitulo, credito)
     fundo = cor_capa.fundo_claro_da_capa(foto)
     tinta = (38, 36, 33)
     tela = Image.new("RGB", (largura, altura), fundo)
@@ -309,9 +337,10 @@ def toscana(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Com
     return Composta(tela)
 
 
-def neon(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def neon(foto, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Sangria total, título condensado na vertical à direita e bloco na base."""
     tipografia = tipografia or par("condensado")
+    subtitulo = _apoio(subtitulo, credito)
     tela = _preencher(foto, largura, altura)
     desenho = ImageDraw.Draw(tela)
     claro = (250, 250, 252)
@@ -357,9 +386,10 @@ def neon(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Compos
     return Composta(tela)
 
 
-def fluir(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def fluir(foto, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Sangria total com tipografia clara no quadrante mais calmo da imagem."""
     tipografia = tipografia or par("alto_contraste")
+    subtitulo = _apoio(subtitulo, credito)
     tela = _preencher(foto, largura, altura)
     desenho = ImageDraw.Draw(tela)
 
@@ -372,10 +402,6 @@ def fluir(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Compo
     escolhido = min(quadrantes,
                     key=lambda nome: _luminancia_media(tela.crop(quadrantes[nome])))
     caixa = quadrantes[escolhido]
-    # Largura total: um véu de meia largura deixa uma emenda vertical no meio da
-    # fotografia, que denuncia o retângulo. Desvanecendo para baixo não há borda.
-    _veu(tela, (0, 0, largura, round(altura * 0.68)), 0.50, clara=False, direcao="baixo")
-
     x = round(largura * 0.06) if escolhido == "esquerda" else metade + round(largura * 0.04)
     limite = metade - round(largura * 0.10)
     texto = (titulo or "").strip()
@@ -383,17 +409,31 @@ def fluir(foto, largura, altura, titulo, subtitulo="", tipografia=None) -> Compo
         texto = texto.upper()
     fonte, linhas = _encaixar(desenho, texto, tipografia.titulo, _pt(48, altura),
                               limite, tipografia.titulo_entreletra)
-    y = round(altura * 0.16)
+    topo = round(altura * 0.16)
+    fonte_sub = _fonte(tipografia.subtitulo, _pt(14, altura))
+    linhas_sub = _quebrar(desenho, subtitulo, fonte_sub, limite) if subtitulo else []
+
+    # O véu é medido pelo texto, não chutado: o bloco cresce com o crédito, e o
+    # quadrante calmo foi escolhido olhando só a metade de cima. Chapado onde as
+    # letras pousam e desvanecendo logo abaixo — assim não há borda visível, e
+    # sobre uma camisa branca o cinza claro continua legível.
+    base_do_bloco = (topo + sum(_entrelinha(fonte, 1.1) for _ in linhas)
+                     + (round(fonte.size * 0.34) if linhas_sub else 0)
+                     + sum(_entrelinha(fonte_sub, 1.38) for _ in linhas_sub))
+    base_do_bloco = min(altura, base_do_bloco + round(altura * 0.03))
+    _veu(tela, (0, 0, largura, base_do_bloco), 0.55, clara=False, direcao="chapado")
+    _veu(tela, (0, base_do_bloco, largura, min(altura, base_do_bloco + round(altura * 0.22))),
+         0.55, clara=False, direcao="baixo")
+
+    y = topo
     for linha in linhas:
         _escrever(desenho, linha, fonte, (x, y), (252, 252, 253),
                   tipografia.titulo_entreletra)
         y += _entrelinha(fonte, 1.1)
-
-    if (subtitulo or "").strip():
-        fonte_sub = _fonte(tipografia.subtitulo, _pt(14, altura))
+    if linhas_sub:
         y += round(fonte.size * 0.34)
-        for linha in _quebrar(desenho, subtitulo.strip(), fonte_sub, limite):
-            _escrever(desenho, linha, fonte_sub, (x, y), (236, 236, 240))
+        for linha in linhas_sub:
+            _escrever(desenho, linha, fonte_sub, (x, y), (240, 240, 244))
             y += _entrelinha(fonte_sub, 1.38)
     return Composta(tela)
 
@@ -411,11 +451,12 @@ def _grade(fotos, largura, altura, colunas, linhas, vao):
     return pecas, celula_l, celula_a
 
 
-def ritmos(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def ritmos(fotos, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Grade 2x2 simétrica sobre campo claro, texto centralizado abaixo."""
     if not fotos:
         raise ValueError("A capa em grade exige ao menos uma fotografia.")
     tipografia = tipografia or par("geometrico")
+    subtitulo = _apoio(subtitulo, credito)
     fundo = cor_capa.fundo_claro_da_capa(fotos[0])
     tela = Image.new("RGB", (largura, altura), fundo)
 
@@ -454,11 +495,12 @@ def ritmos(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Com
     return Composta(tela)
 
 
-def fragmentos(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def fragmentos(fotos, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Colagem diagonal de três fotos à esquerda, texto no respiro à direita."""
     if not fotos:
         raise ValueError("A colagem exige ao menos uma fotografia.")
     tipografia = tipografia or par("editorial")
+    subtitulo = _apoio(subtitulo, credito)
     fundo = cor_capa.fundo_claro_da_capa(fotos[0])
     tela = Image.new("RGB", (largura, altura), fundo)
 
@@ -502,11 +544,12 @@ def fragmentos(fotos, largura, altura, titulo, subtitulo="", tipografia=None) ->
     return Composta(tela)
 
 
-def contrastes(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def contrastes(fotos, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Mosaico assimétrico sobre cinza, com o título girado na vertical."""
     if not fotos:
         raise ValueError("O mosaico exige ao menos uma fotografia.")
     tipografia = tipografia or par("geometrico")
+    subtitulo = _apoio(subtitulo, credito)
     claro = cor_capa.fundo_claro_da_capa(fotos[0])
     # Cinza neutro do guia: o claro extraído, rebaixado para o mosaico saltar.
     fundo = tuple(round(canal * 0.72) for canal in claro)
@@ -535,9 +578,17 @@ def contrastes(fotos, largura, altura, titulo, subtitulo="", tipografia=None) ->
     # O subtítulo divide a faixa com o título: mede-se primeiro, para o título
     # ceder corpo em vez de descer por cima dele.
     x_faixa = largura - faixa_texto + round(faixa_texto * 0.1)
-    fonte_sub = _fonte(tipografia.subtitulo, _pt(13, altura))
-    linhas_sub = (_quebrar(desenho, subtitulo.strip(), fonte_sub,
-                           faixa_texto - round(faixa_texto * 0.2))
+    limite_faixa = faixa_texto - round(faixa_texto * 0.2)
+    corpo_sub = _pt(13, altura)
+    fonte_sub = _fonte(tipografia.subtitulo, corpo_sub)
+    # A faixa é estreita de propósito. Com o crédito, a maior palavra costuma
+    # ser o endereço do site: o corpo cede até ele caber inteiro.
+    if (subtitulo or "").strip():
+        maior = max(subtitulo.split(), key=len)
+        while corpo_sub > 7 and desenho.textlength(maior, font=fonte_sub) > limite_faixa:
+            corpo_sub -= 1
+            fonte_sub = _fonte(tipografia.subtitulo, corpo_sub)
+    linhas_sub = (_quebrar(desenho, subtitulo.strip(), fonte_sub, limite_faixa)
                   if (subtitulo or "").strip() else [])
     pe = sum(_entrelinha(fonte_sub, 1.3) for _ in linhas_sub)
     if pe:
@@ -556,11 +607,12 @@ def contrastes(fotos, largura, altura, titulo, subtitulo="", tipografia=None) ->
     return Composta(tela)
 
 
-def caminho(fotos, largura, altura, titulo, subtitulo="", tipografia=None) -> Composta:
+def caminho(fotos, largura, altura, titulo, subtitulo="", credito="", tipografia=None) -> Composta:
     """Três fotos em sequência na metade inferior, respiro amplo em cima."""
     if not fotos:
         raise ValueError("A narrativa linear exige ao menos uma fotografia.")
     tipografia = tipografia or par("narrativo")
+    subtitulo = _apoio(subtitulo, credito)
     fundo = cor_capa.fundo_claro_da_capa(fotos[0])
     # Bege quente: o claro extraído, levemente rebaixado para não competir.
     fundo = tuple(round(canal * 0.93) for canal in fundo)

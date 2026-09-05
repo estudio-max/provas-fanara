@@ -1,7 +1,10 @@
 """Estilos de capa: composições feitas com as fotos da própria sessão."""
 from __future__ import annotations
 
+from functools import lru_cache
+
 import math
+import os
 from collections.abc import Iterable
 from hashlib import sha256
 from dataclasses import dataclass
@@ -54,9 +57,33 @@ def _classic_face_safe(
     target_size: tuple[int, int] | None = None,
 ) -> bool:
     """Tell whether the exact classic crop keeps every confident face fully visible."""
+    try:
+        estado = os.stat(photo.path)
+        impressao = (estado.st_size, estado.st_mtime_ns)
+    except OSError:
+        impressao = (None, None)
+    return _classic_face_safe_lembrado(
+        photo.path, photo.label, impressao, crop, target_size
+    )
+
+
+@lru_cache(maxsize=512)
+def _classic_face_safe_lembrado(
+    path: str,
+    label: str,
+    _impressao: tuple[object, object],
+    crop: ClassicCrop | None,
+    target_size: tuple[int, int] | None,
+) -> bool:
+    """Detectar rostos custa ~100 ms por fotografia, e a escolha da capa roda em
+    todas elas. A resposta depende só do arquivo e do enquadramento pedido, mas
+    era recalculada a cada prévia — inclusive ao digitar o título, que não muda
+    nada disso. A impressão do arquivo entra na chave para uma foto substituída
+    na pasta não devolver a resposta antiga.
+    """
     from . import capa_classica
 
-    source = imagens.abrir(imagens.Foto(photo.path, photo.label))
+    source = imagens.abrir(imagens.Foto(path, label))
     try:
         requested = crop or capa_classica.ClassicCrop()
         faces = tuple(capa_classica.enquadramento.detect_faces(source))
@@ -440,6 +467,20 @@ def _destaque(miniaturas: list[Image.Image], largura: int, altura: int,
     return fundo
 
 
+def fotos_usadas_pela_capa(estilo: str) -> int | None:
+    """Quantas fotografias o estilo desenha de fato. ``None`` significa todas.
+
+    Quatro estilos editoriais usam só a primeira foto da capa. O seletor
+    oferecia todas as posições mesmo assim, e trocar a segunda não mudava nada
+    na tela — parecia que o aplicativo tinha ignorado o clique.
+    """
+    if estilo == "classica":
+        return 1
+    if estilo in ESTILOS_EDITORIAIS:
+        return None if ESTILOS_EDITORIAIS[estilo][1] else 1
+    return None
+
+
 def _gerar_editorial(
     estilo: str,
     miniaturas,
@@ -461,9 +502,14 @@ def _gerar_editorial(
     ]
     if not imagens_capa:
         raise ValueError(f"A capa {estilo} exige ao menos uma fotografia.")
+    # O fotógrafo e o site assinam toda capa. Estes estilos não recebem o bloco
+    # de identidade do motor, então o crédito entra na linha de apoio deles.
+    credito = " · ".join(
+        parte for parte in (identity.studio.strip(), identity.site.strip()) if parte
+    )
     arte = funcao(
         imagens_capa if varias else imagens_capa[0],
-        largura, altura, identity.title, subtitulo,
+        largura, altura, identity.title, subtitulo, credito,
     )
     return Capa(arte.imagem, 1.0, identity_embedded=True,
                 used_photo_ids=arte.fotos_usadas)

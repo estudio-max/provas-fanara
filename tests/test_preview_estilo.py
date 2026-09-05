@@ -92,6 +92,8 @@ def _config(**mudancas):
     ("capa_foco_x", 0.9),
     ("capa_foco_y", 0.9),
     ("capa_enquadramento", "manual"),
+    ("titulo", "outro"),
+    ("site", "outro.com.br"),
 ])
 def test_campos_de_capa_nao_invalidam_a_previa_das_paginas(campo, valor):
     """Trocar a capa redesenhava o livro inteiro para atualizar uma imagem só.
@@ -112,7 +114,6 @@ def test_campos_de_capa_nao_invalidam_a_previa_das_paginas(campo, valor):
     ("fundo_paginas", "preto"),
     ("sombra_fotos", True),
     ("qualidade", "alta"),
-    ("titulo", "outro"),
     ("estudio", "outro"),
 ])
 def test_campos_da_pagina_continuam_invalidando_a_previa(campo, valor):
@@ -203,3 +204,37 @@ def test_a_primeira_previa_ainda_mostra_o_esqueleto(qt_app: QApplication, tmp_pa
     janela.deleteLater()
     for _ in range(3):
         qt_app.processEvents()
+
+
+@pytest.mark.parametrize("campo,valor", [("titulo", "OUTRO TÍTULO"), ("site", "outro.com.br")])
+@pytest.mark.parametrize("modo", ["prova", "fotolivro"])
+def test_identidade_da_capa_nao_redesenha_pagina_interna(campo, valor, modo, tmp_path, image_factory):
+    """A prova de que a poda está certa: renderizar, não só comparar assinaturas.
+
+    Título e site só aparecem na capa. Enquanto entravam na assinatura, cada
+    pausa na digitação desses campos redesenhava o livro inteiro — o que tornava
+    a identidade quase impossível de preencher numa sessão grande.
+    """
+    from dataclasses import replace as _replace
+
+    from PIL import ImageChops
+
+    from provas import motor
+
+    for indice in range(5):
+        image_factory(f"foto-{indice}.jpg", size=(300, 450))
+    config = motor.Config(
+        str(tmp_path), modo=modo, marca_dagua=modo == "prova",
+        mostrar_codigos=modo == "prova", titulo="TÍTULO", site="site.com.br",
+        estudio="Estúdio", qualidade="leve", semente=17,
+    ).com_padroes()
+    plano = motor.analisar_plano(config).plan
+
+    antes = list(motor.gerar_preview(config, plano, width=320))[1:]
+    depois = list(motor.gerar_preview(_replace(config, **{campo: valor}), plano, width=320))[1:]
+
+    assert antes, "o ensaio precisa ter páginas internas para o teste valer"
+    for numero, (uma, outra) in enumerate(zip(antes, depois), start=2):
+        assert ImageChops.difference(uma.convert("RGB"), outra.convert("RGB")).getbbox() is None, (
+            f"{campo} redesenhou a página {numero}"
+        )

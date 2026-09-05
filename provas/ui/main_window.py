@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..capas import validate_cover_style
+from ..capas import fotos_usadas_pela_capa, validate_cover_style
 from ..capa_classica import ClassicCrop
 from ..ciclo_paginas import tem_alternativa
 from ..modelos import BookPlan, PhotoInfo
@@ -894,16 +894,23 @@ class MainWindow(QMainWindow):
                 )
             )
         )
-        classic = self.project_state.config.estilo_capa == "classica"
-        selected = (
-            (self.project_state.config.foto_capa_id,)
-            if classic and self.project_state.config.foto_capa_id
-            else self.project_state.plan.cover_photo_ids
-        )
+        estilo = self.project_state.config.estilo_capa
+        classic = estilo == "classica"
+        # Oferecer posições que o estilo não desenha faz o clique parecer perdido.
+        uma_foto = fotos_usadas_pela_capa(estilo) == 1
+        if classic and self.project_state.config.foto_capa_id:
+            selected = (self.project_state.config.foto_capa_id,)
+        elif uma_foto:
+            selected = self.project_state.plan.cover_photo_ids[:1]
+        else:
+            selected = self.project_state.plan.cover_photo_ids
         remaining = tuple(photo_id for photo_id in all_ids if photo_id not in selected)
-        dialog = CoverDialog(selected, remaining, self, single_selection=classic)
+        dialog = CoverDialog(selected, remaining, self, single_selection=uma_foto)
         dialog.replacement_requested.connect(self._cover_replaced)
-        dialog.single_photo_selected.connect(self.set_classic_cover_photo)
+        dialog.single_photo_selected.connect(
+            self.set_classic_cover_photo if classic
+            else lambda photo_id: self._cover_replaced(0, photo_id)
+        )
         dialog.finished.connect(lambda _result: self._release_cover_dialog(dialog))
         self._cover_dialog = dialog
         dialog.open()

@@ -219,10 +219,10 @@ class WorkflowSidebar(QFrame):
 
         self._identity_timer = QTimer(self)
         self._identity_timer.setSingleShot(True)
-        # Rendering a preview opens every photograph used by the album.  A
-        # short debounce expired between ordinary keystrokes and started that
-        # expensive work once per letter; wait for a deliberate typing pause.
-        self._identity_timer.setInterval(800)
+        # A prévia já não reabre as fotografias a cada mudança de identidade —
+        # elas ficam preparadas em memória e só a capa é redesenhada. Com o
+        # trabalho barato, a espera pode ser a de uma pausa curta na digitação.
+        self._identity_timer.setInterval(300)
         self._identity_timer.timeout.connect(self._emit_cover_identity)
         for edit in (self.title_edit, self.studio_edit, self.site_edit):
             edit.textChanged.connect(lambda _text: self._identity_timer.start())

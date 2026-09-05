@@ -475,10 +475,20 @@ def test_render_fingerprint_includes_cover_style_identity_logo_stat_and_seed(
     assert baseline == motor.render_style_fingerprint(curved, "fotolivro", 101)
 
     assert baseline != motor.render_style_fingerprint(mosaic, "fotolivro", 102)
+
+    # Título e site também só desenham a capa — provado renderizando, em
+    # `test_identidade_da_capa_nao_redesenha_pagina_interna`. Enquanto estavam
+    # aqui, cada pausa na digitação recarregava a sessão inteira.
+    for campo, valor in (("titulo", "Outro título"), ("site", "outro.example")):
+        assert baseline == motor.render_style_fingerprint(
+            motor.Config(**{**common, campo: valor}, estilo_capa="mosaico"),
+            "fotolivro", 101,
+        )
+
+    # O estúdio fica: sem logotipo legível, ele vira a marca d'água das fotos.
     assert baseline != motor.render_style_fingerprint(
-        motor.Config(**{**common, "titulo": "Outro título"}, estilo_capa="mosaico"),
-        "fotolivro",
-        101,
+        motor.Config(**{**common, "estudio": "Outro"}, estilo_capa="mosaico"),
+        "fotolivro", 101,
     )
     logo.write_bytes(b"changed-logo-state")
     assert baseline != motor.render_style_fingerprint(mosaic, "fotolivro", 101)

@@ -257,6 +257,57 @@ def _proporcao_tipica(fotos, girar: bool, amostra: int = 8) -> float:
     return statistics.median(razoes) if razoes else 2 / 3
 
 
+#: Preparar as fotos custa alguns segundos: lista a pasta, analisa nitidez e
+#: exposição, redimensiona, aplica a marca d'água e recodifica cada imagem.
+#: Nada disso depende do título, do site ou do estilo da capa — e mesmo assim a
+#: prévia refazia tudo a cada pausa na digitação desses campos, deixando os
+#: campos de identidade praticamente impossíveis de preencher.
+#:
+#: Uma vaga só, de propósito: o caso que importa é a mesma sessão sendo ajustada
+#: muitas vezes seguidas, e cada vaga guarda as fotos inteiras codificadas.
+_ATIVOS_MEMORIA: tuple[object, dict, object] | None = None
+
+
+def _impressao_do_arquivo(caminho: str) -> tuple[object, ...]:
+    """Identidade de um arquivo sem lê-lo: caminho, tamanho e data de escrita."""
+    try:
+        estado = os.stat(caminho)
+    except OSError:
+        return (caminho, None, None)
+    return (caminho, estado.st_size, estado.st_mtime_ns)
+
+
+def _chave_dos_ativos(config: Config, plan: BookPlan) -> tuple[object, ...]:
+    """Tudo que muda o conteúdo de um RenderAsset — e nada além disso.
+
+    Errar para mais só custa um preparo desnecessário; errar para menos entrega
+    foto velha, então o que estiver em dúvida entra.
+    """
+    arquivos = tuple(
+        _impressao_do_arquivo(foto.caminho)
+        for foto in imagens.listar_fotos(config.pasta, config.recursivo)
+    )
+    if config.limite:
+        arquivos = arquivos[:config.limite]
+    exigidas = tuple(dict.fromkeys(
+        (*(pid for pagina in plan.pages for pid in pagina.photo_ids), *plan.cover_photo_ids)
+    ))
+    return (
+        os.path.abspath(config.pasta), config.recursivo, config.limite, arquivos,
+        plan.mode, exigidas, config.qualidade,
+        # A marca d'água é gravada nos pixels: mudar logotipo, estúdio, largura
+        # ou opacidade muda a foto embutida, não só a capa.
+        config.marca_dagua, config.marca_opacidade, config.marca_largura,
+        config.estudio.strip(), _impressao_do_arquivo(config.logo.strip()),
+    )
+
+
+def limpar_cache_de_ativos() -> None:
+    """Esquece as fotos preparadas. Serve aos testes e à troca de pasta."""
+    global _ATIVOS_MEMORIA
+    _ATIVOS_MEMORIA = None
+
+
 def _prepare_render_assets(
     config: Config,
     plan: BookPlan,
@@ -264,6 +315,14 @@ def _prepare_render_assets(
     cancelar: object | None = None,
 ) -> tuple[dict[str, documento.RenderAsset], AnalysisResult]:
     """Load only plan-backed assets; never repair or recompose the supplied plan."""
+    global _ATIVOS_MEMORIA
+
+    chave = _chave_dos_ativos(config, plan)
+    if _ATIVOS_MEMORIA is not None and _ATIVOS_MEMORIA[0] == chave:
+        total = max(1, len(_ATIVOS_MEMORIA[1]))
+        _avisar(progresso, total, total, "Fotos já preparadas.", cancelar)
+        return _ATIVOS_MEMORIA[1], _ATIVOS_MEMORIA[2]
+
     analysis = _analisar_config(config, progresso, cancelar, require_photos=False)
     by_id = {photo.id: photo for photo in analysis.photos}
     planned_ids = tuple(photo_id for page in plan.pages for photo_id in page.photo_ids)
@@ -332,6 +391,7 @@ def _prepare_render_assets(
     finally:
         if watermark is not None:
             watermark.close()
+    _ATIVOS_MEMORIA = (chave, assets, analysis)
     return assets, analysis
 
 
@@ -506,9 +566,14 @@ def render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[obje
     """Describe every config input that can alter an internal rendered page.
 
     O que só desenha a capa fica de fora de propósito — `estilo_capa`,
-    `cor_fundo`, `subtitulo` e os campos de enquadramento da capa. Incluí-los
-    invalidava a miniatura de todas as páginas a cada troca de capa, e o
-    aplicativo redesenhava o livro inteiro para atualizar uma imagem só.
+    `cor_fundo`, `subtitulo`, `titulo`, `site` e os campos de enquadramento da
+    capa. Incluí-los invalidava a miniatura de todas as páginas a cada troca de
+    capa, e o aplicativo redesenhava o livro inteiro para atualizar uma imagem
+    só — o que tornava os campos de identidade quase impossíveis de preencher,
+    porque cada pausa na digitação recarregava a sessão inteira.
+
+    `estudio` e `logo` ficam: os dois entram na marca d'água, que é gravada nos
+    pixels de cada fotografia.
     """
     logo_path = config.logo.strip()
     logo_state: tuple[object, ...] = (os.path.abspath(logo_path), None, None)
@@ -521,10 +586,8 @@ def render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[obje
     return (
         mode,
         seed,
-        # Moldura da página: logotipo, estúdio, título e rodapé.
-        config.titulo,
+        # Marca d'água da página, gravada nos pixels.
         config.estudio,
-        config.site,
         logo_state,
         # Corpo da página.
         config.fundo_paginas,
@@ -649,10 +712,16 @@ def _render_cover(
                 crop,
             )
         else:
+            # O mosaico e as curvas montam ladrilhos pequenos, e 320px bastam.
+            # Os estilos editoriais usam a fotografia grande — em `fluir` ela
+            # ocupa a capa inteira — e a miniatura saía ampliada 5x, borrada no
+            # PDF. Estes recebem a resolução que a capa realmente imprime.
+            lado = (max(width, height) if config.estilo_capa in capas.ESTILOS_EDITORIAIS
+                    else LADO_MINIATURA)
             for info in selected:
                 source = imagens.abrir(imagens.Foto(info.path, info.label))
                 try:
-                    resized = imagens.redimensionar(source, LADO_MINIATURA)
+                    resized = imagens.redimensionar(source, lado)
                     thumbnail = resized.copy() if resized is source else resized
                     thumbnail.info.update(
                         quality=info.quality,
