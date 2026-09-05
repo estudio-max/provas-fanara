@@ -9,7 +9,7 @@ import sys
 PRODUCT_NAME = "Fanara - Fotolivro"
 # Fonte única da versão: os empacotadores e a tela de boas-vindas leem daqui.
 # A Store guarda cada versão numa URL própria, então incremente a cada envio.
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 ORGANIZATION_NAME = "Estúdio Fanara"
 COPYRIGHT = "© 2026 Estúdio Fanara"
 MANIFEST_NAME = "BUILD-MANIFEST.json"
