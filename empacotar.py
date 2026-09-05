@@ -23,9 +23,14 @@ RAIZ = os.path.dirname(os.path.abspath(__file__))
 NOME = PRODUCT_NAME
 ENTRADA = os.path.join(RAIZ, "empacotar_entrada.py")
 MANIFESTO = "BUILD-MANIFEST.json"
+#: Tudo que mora em assets/, pelo caminho relativo. O pacote não pode levar
+#: imagem nenhuma além destas: é o que impede uma fotografia ou o logotipo de
+#: um cliente sair junto na distribuição.
 OFFICIAL_ASSETS = {
-    name: hashlib.sha256(Path(RAIZ, "assets", name).read_bytes()).hexdigest()
-    for name in ("fanara-symbol.png", "icone.ico")
+    caminho.relative_to(Path(RAIZ, "assets")).as_posix():
+        hashlib.sha256(caminho.read_bytes()).hexdigest()
+    for caminho in sorted(Path(RAIZ, "assets").rglob("*"))
+    if caminho.is_file()
 }
 
 LEIAME_WINDOWS = f"""{PRODUCT_NAME} — PDF editorial a partir da pasta do ensaio
@@ -112,9 +117,7 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         hashes = {
             name.lower(): hashlib.sha256(archive.read(original)).hexdigest()
             for name, original in zip(nomes, archive.namelist())
-            if name.lower() in {
-                f"{prefixo_interno}assets/{asset}" for asset in OFFICIAL_ASSETS
-            }
+            if name.lower().startswith(f"{prefixo_interno}assets/")
         }
     minusculos = tuple(name.lower() for name in nomes)
     for obrigatorio in obrigatorios:
@@ -138,20 +141,24 @@ def inspecionar_pacote(pacote: str | Path) -> tuple[str, ...]:
         if not any(presente(name) for name in minusculos):
             problemas.append(f"ativo obrigatório ausente: {rotulo}")
     proibidos = {"config.json", "logo.png"}
+    oficiais = {nome.lower(): digest for nome, digest in OFFICIAL_ASSETS.items()}
     Image.init()
     extensoes_de_imagem = set(Image.registered_extensions()) | {
         ".nef", ".cr2", ".arw", ".dng", ".orf", ".rw2",
     }
     for name in minusculos:
+        if name.endswith("/"):        # entrada de diretório, não carrega conteúdo
+            continue
         if Path(name).name in proibidos:
             problemas.append(f"dado de usuário incluído: {name}")
         elif name.endswith(".provas.json"):
             problemas.append(f"projeto de usuário incluído: {name}")
-        elif name in {
-            f"{prefixo_interno}assets/{asset}" for asset in OFFICIAL_ASSETS
-        }:
-            asset = Path(name).name
-            if hashes.get(name) != OFFICIAL_ASSETS[asset]:
+        elif name.startswith(f"{prefixo_interno}assets/"):
+            relativo = name[len(f"{prefixo_interno}assets/"):]
+            esperado = oficiais.get(relativo)
+            if esperado is None:
+                problemas.append(f"ativo não oficial no pacote: {name}")
+            elif hashes.get(name) != esperado:
                 problemas.append(f"ativo oficial com hash inválido: {name}")
         elif Path(name).suffix in extensoes_de_imagem:
             problemas.append(f"fotografia ou logotipo incluído no pacote: {name}")
