@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import io
 from collections.abc import Mapping
 
 import pymupdf
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 from . import imagens, tema
 from .modelos import PagePlan, PhotoInfo, Rect, Template
@@ -249,6 +250,32 @@ def celula(grade: Grade, indice: int, area: tuple[float, float, float, float],
 
 # --- desenho --------------------------------------------------------------
 
+# Sombra das fotografias. O PDF vetorial não tem desfoque: empilhar retângulos
+# produz degraus, não fumaça. Então a sombra é uma imagem em tons de cinza
+# borrada com Gaussiana e inserida atrás da foto, com canal alfa.
+_SOMBRA_DESFOQUE = 9.0        # pontos de esfumaçado além da borda da foto
+_SOMBRA_DESLOCAMENTO = 3.5    # pontos para baixo, luz vindo de cima
+_SOMBRA_FORCA = 0.42          # alfa no núcleo, antes do desfoque
+_SOMBRA_RESOLUCAO = 2.0       # px por ponto; desfoque é baixa frequência, não
+                              # precisa da resolução das fotos
+
+
+@lru_cache(maxsize=96)
+def _sprite_sombra(largura_px: int, altura_px: int, margem_px: int, forca: float) -> bytes:
+    """PNG preto cujo alfa é um retângulo borrado. Em cache: repete por página."""
+    alfa = Image.new("L", (largura_px, altura_px), 0)
+    ImageDraw.Draw(alfa).rectangle(
+        (margem_px, margem_px, largura_px - margem_px - 1, altura_px - margem_px - 1),
+        fill=round(255 * forca),
+    )
+    alfa = alfa.filter(ImageFilter.GaussianBlur(margem_px / 2.2))
+    sombra = Image.new("RGBA", (largura_px, altura_px), (0, 0, 0, 0))
+    sombra.putalpha(alfa)
+    buffer = io.BytesIO()
+    sombra.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
 class Documento:
     def __init__(self, titulo: str, subtitulo: str, paisagem: bool, tipografia: Tipografia,
                  logo: bytes | None, logo_proporcao: float = 1200 / 630,
@@ -281,16 +308,39 @@ class Documento:
         image_rect: pymupdf.Rect,
         slot_bounds: pymupdf.Rect,
     ) -> None:
-        """Draw a clipped vector shadow behind one physical photograph."""
-        for offset, expansion, opacity in ((1.5, 1.5, 0.075), (3.0, 2.0, 0.045), (5.0, 3.0, 0.025)):
-            shadow = pymupdf.Rect(
-                image_rect.x0 - expansion + offset,
-                image_rect.y0 - expansion + offset,
-                image_rect.x1 + expansion + offset,
-                image_rect.y1 + expansion + offset,
-            ) & slot_bounds
-            if not shadow.is_empty:
-                page.draw_rect(shadow, color=None, fill=(0, 0, 0), fill_opacity=opacity)
+        """Desenha a sombra esfumaçada atrás de uma fotografia, recortada à célula."""
+        alvo = pymupdf.Rect(
+            image_rect.x0 - _SOMBRA_DESFOQUE,
+            image_rect.y0 - _SOMBRA_DESFOQUE + _SOMBRA_DESLOCAMENTO,
+            image_rect.x1 + _SOMBRA_DESFOQUE,
+            image_rect.y1 + _SOMBRA_DESFOQUE + _SOMBRA_DESLOCAMENTO,
+        )
+        visivel = alvo & slot_bounds
+        if visivel.is_empty or alvo.width <= 0 or alvo.height <= 0:
+            return
+
+        largura_px = max(8, round(alvo.width * _SOMBRA_RESOLUCAO))
+        altura_px = max(8, round(alvo.height * _SOMBRA_RESOLUCAO))
+        margem_px = max(1, round(_SOMBRA_DESFOQUE * _SOMBRA_RESOLUCAO))
+        png = _sprite_sombra(largura_px, altura_px, margem_px, _SOMBRA_FORCA)
+
+        if visivel != alvo:
+            # A célula corta parte da sombra; recorta o sprite na mesma proporção
+            # em vez de espremer a imagem inteira dentro do que sobrou.
+            with Image.open(io.BytesIO(png)) as sprite:
+                caixa = (
+                    round((visivel.x0 - alvo.x0) / alvo.width * largura_px),
+                    round((visivel.y0 - alvo.y0) / alvo.height * altura_px),
+                    round((visivel.x1 - alvo.x0) / alvo.width * largura_px),
+                    round((visivel.y1 - alvo.y0) / alvo.height * altura_px),
+                )
+                if caixa[2] - caixa[0] < 1 or caixa[3] - caixa[1] < 1:
+                    return
+                buffer = io.BytesIO()
+                sprite.crop(caixa).save(buffer, format="PNG", optimize=True)
+                png = buffer.getvalue()
+
+        page.insert_image(visivel, stream=png, keep_proportion=False, overlay=True)
 
     def nova_pagina(self) -> pymupdf.Page:
         pagina = self.pdf.new_page(width=self.tamanho[0], height=self.tamanho[1])

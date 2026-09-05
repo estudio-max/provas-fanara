@@ -26,6 +26,29 @@ PAGE_APPEARANCE_BACKGROUNDS = ("branco", "cinza", "preto")
 PAGE_APPEARANCE_MODES = ("prova", "fotolivro")
 PAGE_APPEARANCE_STYLES = ("classica", "mosaico", "curvas_editoriais")
 
+#: A prévia mostra o que será impresso, dentro de um nível de cor. A sombra das
+#: fotos é uma imagem borrada com canal alfa, porque PDF não tem desfoque; ao
+#: salvar o documento a máscara é reencodada e desloca até um nível numa fração
+#: dos pixels — invisível, e bem abaixo da resolução de impressão. Qualquer
+#: divergência real (fundo errado, sombra faltando, foto deslocada) passa longe
+#: desse limite.
+TOLERANCIA_DE_PARIDADE = 1
+
+
+def conferir_paridade(atual, esperada, contexto: str,
+                      tolerancia: int = TOLERANCIA_DE_PARIDADE) -> None:
+    """Falha alto se a prévia e o PDF divergirem além do ruído de reencodagem."""
+    from PIL import ImageChops
+
+    diferenca = ImageChops.difference(atual.convert("RGB"), esperada.convert("RGB"))
+    if diferenca.getbbox() is None:
+        return
+    # Máximo por canal: converter para cinza pesaria a luminância e esconderia
+    # uma divergência que vive só no azul.
+    maior = max(maximo for _minimo, maximo in diferenca.getextrema())
+    if maior > tolerancia:
+        raise AssertionError(f"prévia diverge do PDF em {contexto}: {maior}/255")
+
 
 def render_pdf(
     pdf_path: Path, *, dpi: int = 120, contact_sheet: Path | None = None
@@ -382,10 +405,10 @@ def build_page_appearance_cases(output: Path, *, dpi: int = 120) -> tuple[Path, 
                                 "RGB", (pixmap.width, pixmap.height), pixmap.samples
                             )
                             try:
-                                if rendered.tobytes() != previews[page_index].tobytes():
-                                    raise AssertionError(
-                                        f"prévia diverge do PDF em {stem}, página {page_index + 1}"
-                                    )
+                                conferir_paridade(
+                                    rendered, previews[page_index],
+                                    f"{stem}, página {page_index + 1}",
+                                )
                             finally:
                                 rendered.close()
                     cover_hash = hashlib.sha256(previews[0].tobytes()).hexdigest()

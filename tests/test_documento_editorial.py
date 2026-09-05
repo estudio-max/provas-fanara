@@ -17,6 +17,19 @@ def _photo(path: Path, index: int) -> PhotoInfo:
     return PhotoInfo(str(path), str(path), path.name, width, height, index)
 
 
+def _fotografias(documento, pagina):
+    """As fotografias da página, sem a arte que a aparência acrescenta."""
+    return [imagem for imagem in pagina.get_images(full=True)
+            if documento.extract_image(imagem[0])["ext"] in ("jpeg", "jpg")]
+
+
+def _arte_de_sombra(documento, pagina):
+    """Os retângulos ocupados pela sombra — hoje uma imagem borrada por foto."""
+    return [pagina.get_image_rects(imagem)[0]
+            for imagem in pagina.get_images(full=True)
+            if documento.extract_image(imagem[0])["ext"] not in ("jpeg", "jpg")]
+
+
 def _point_rect(rect, page_width: float, page_height: float) -> pymupdf.Rect:
     return pymupdf.Rect(
         rect.x * page_width,
@@ -79,8 +92,8 @@ def test_page_background_and_photo_shadow_preserve_photos_and_slots(
         finally:
             rendered.close()
 
-        images = page.get_images(full=True)
-        baseline_images = baseline_page.get_images(full=True)
+        images = _fotografias(pdf, page)
+        baseline_images = _fotografias(baseline_pdf, baseline_page)
         assert len(images) == len(infos)
         assert len(baseline_images) == len(images)
         for image, baseline_image, info, slot in zip(images, baseline_images, infos, template.slots):
@@ -94,33 +107,22 @@ def test_page_background_and_photo_shadow_preserve_photos_and_slots(
                 (expected.x, expected.y, expected.right, expected.bottom), abs=0.05,
             )
 
-        fills = [drawing for drawing in page.get_drawings() if drawing.get("fill") == (0.0, 0.0, 0.0)]
-        assert len(fills) == (3 * len(infos) if shadow else 0)
-        if shadow:
-            assert sum(drawing["fill_opacity"] for drawing in fills) / len(infos) == pytest.approx(0.145)
-            assert sum(drawing["fill_opacity"] for drawing in fills) / len(infos) < 0.16
-        for drawing in fills:
-            assert any(drawing["fill_opacity"] == pytest.approx(opacity, abs=1e-6)
-                       for opacity in (0.075, 0.045, 0.025))
-            containing_slots = [
+        # A sombra deixou de ser retângulo vetorial: virou imagem borrada com
+        # canal alfa, porque PDF não tem desfoque e empilhar retângulos produz
+        # degrau. O que continua valendo é a contenção — cada sombra fica dentro
+        # da célula da sua foto e não invade a vizinha.
+        sombras = _arte_de_sombra(pdf, page)
+        assert len(sombras) == (len(infos) if shadow else 0)
+        for rect in sombras:
+            celulas = [
                 _point_rect(slot.rect, page.rect.width, page.rect.height)
                 for slot in template.slots
-                if (
-                    drawing["rect"].x0 >= _point_rect(slot.rect, page.rect.width, page.rect.height).x0 - 0.05
-                    and drawing["rect"].y0 >= _point_rect(slot.rect, page.rect.width, page.rect.height).y0 - 0.05
-                    and drawing["rect"].x1 <= _point_rect(slot.rect, page.rect.width, page.rect.height).x1 + 0.05
-                    and drawing["rect"].y1 <= _point_rect(slot.rect, page.rect.width, page.rect.height).y1 + 0.05
-                )
             ]
-            assert containing_slots
-            assert not any(
-                _point_rect(other.rect, page.rect.width, page.rect.height).intersects(drawing["rect"])
-                for other in template.slots
-                if other.rect not in {
-                    slot.rect for slot in template.slots
-                    if _point_rect(slot.rect, page.rect.width, page.rect.height) in containing_slots
-                }
-            )
+            dona = [c for c in celulas
+                    if rect.x0 >= c.x0 - 0.05 and rect.y0 >= c.y0 - 0.05
+                    and rect.x1 <= c.x1 + 0.05 and rect.y1 <= c.y1 + 0.05]
+            assert dona, "a sombra escapou da célula da fotografia"
+            assert not any(c.intersects(rect) for c in celulas if c not in dona)
 
 
 @pytest.mark.parametrize(
@@ -343,7 +345,14 @@ def test_legacy_proof_caption_is_centered_on_its_photo_without_a_filled_band(tmp
         )
 
 
-def test_legacy_card_shadow_is_vector_clipped_and_preserves_its_jpeg(tmp_path: Path, image_factory):
+def test_legacy_card_shadow_is_contained_and_preserves_its_jpeg(tmp_path: Path, image_factory):
+    """Ligar a sombra não recodifica a foto, e a sombra não escapa do cartão.
+
+    Antes a sombra eram três retângulos vetoriais de opacidade fixa. Virou uma
+    imagem borrada com canal alfa — PDF não tem desfoque, e empilhar retângulos
+    dá degrau em vez de fumaça. As duas garantias que importam continuam: a
+    fotografia sai byte a byte igual, e a sombra fica dentro da área do cartão.
+    """
     from provas import tema
     from provas.documento import Documento, Tipografia
 
@@ -365,27 +374,26 @@ def test_legacy_card_shadow_is_vector_clipped_and_preserves_its_jpeg(tmp_path: P
 
     with pymupdf.open(documents[0]) as plain_pdf, pymupdf.open(documents[1]) as shadow_pdf:
         plain_page, shadow_page = plain_pdf[0], shadow_pdf[0]
-        plain_image = plain_page.get_images(full=True)[0]
-        shadow_image = shadow_page.get_images(full=True)[0]
-        assert plain_pdf.extract_image(plain_image[0])["image"] == shadow_pdf.extract_image(shadow_image[0])["image"]
+        plain_image = _fotografias(plain_pdf, plain_page)[0]
+        shadow_image = _fotografias(shadow_pdf, shadow_page)[0]
+        assert (plain_pdf.extract_image(plain_image[0])["image"]
+                == shadow_pdf.extract_image(shadow_image[0])["image"])
         assert tuple(plain_page.get_image_rects(plain_image)[0]) == pytest.approx(
             tuple(shadow_page.get_image_rects(shadow_image)[0]), abs=0.01,
         )
-        shadows = [drawing for drawing in shadow_page.get_drawings() if drawing.get("fill") == (0.0, 0.0, 0.0)]
-        assert len(shadows) == 3
-        safe_bounds = pymupdf.Rect(
+
+        assert _arte_de_sombra(plain_pdf, plain_page) == []
+        sombras = _arte_de_sombra(shadow_pdf, shadow_page)
+        assert len(sombras) == 1
+        limite = pymupdf.Rect(
             cell.x0 + tema.RESPIRO_CARTAO,
             cell.y0 + tema.RESPIRO_CARTAO,
             cell.x1 - tema.RESPIRO_CARTAO,
             cell.y1 - 20,
         )
-        assert all(
-            drawing["rect"].x0 >= safe_bounds.x0 - 0.05
-            and drawing["rect"].y0 >= safe_bounds.y0 - 0.05
-            and drawing["rect"].x1 <= safe_bounds.x1 + 0.05
-            and drawing["rect"].y1 <= safe_bounds.y1 + 0.05
-            for drawing in shadows
-        )
+        rect = sombras[0]
+        assert (rect.x0 >= limite.x0 - 0.05 and rect.y0 >= limite.y0 - 0.05
+                and rect.x1 <= limite.x1 + 0.05 and rect.y1 <= limite.y1 + 0.05)
 
 
 def test_thumbnail_reuses_pdf_rendering_rules_and_cache(image_factory):

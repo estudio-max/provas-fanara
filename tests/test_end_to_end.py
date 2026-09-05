@@ -148,6 +148,48 @@ def _pdf_images(pdf: pymupdf.Document, page_index: int) -> list[Image.Image]:
     return images
 
 
+def _identicas(atual, esperada, tolerancia: int = 1) -> None:
+    """Mesma garantia de paridade que o `visual_qa` aplica na matriz completa."""
+    from tests.visual_qa import conferir_paridade
+
+    conferir_paridade(atual, esperada, "página", tolerancia)
+
+
+def test_a_conferencia_de_paridade_enxerga_divergencia_em_qualquer_canal():
+    """Converter a diferença para cinza pesa a luminância e esconde o azul.
+
+    O canal azul vale 7% do cinza: uma divergência de 2/255 só nele virava 0 e
+    a conferência passava calada — que foi exatamente como o erro entrou.
+    """
+    from tests.visual_qa import conferir_paridade
+
+    base = Image.new("RGB", (8, 8), (255, 255, 255))
+    conferir_paridade(base, base, "iguais")
+    conferir_paridade(base, _com_pixel(base, (254, 254, 254)), "ruído de reencodagem")
+
+    for canal in range(3):
+        cor = [255, 255, 255]
+        cor[canal] = 253
+        with pytest.raises(AssertionError, match="2/255"):
+            conferir_paridade(base, _com_pixel(base, tuple(cor)), "divergência real")
+
+
+def _com_pixel(imagem, cor):
+    copia = imagem.copy()
+    copia.putpixel((3, 3), cor)
+    return copia
+
+
+def _fotos_embutidas(documento, indice: int) -> list[bytes]:
+    """As fotografias de uma página, sem a arte que a aparência acrescenta."""
+    fotos = []
+    for imagem in documento[indice].get_images(full=True):
+        dados = documento.extract_image(imagem[0])
+        if dados["ext"] in ("jpeg", "jpg"):
+            fotos.append(dados["image"])
+    return fotos
+
+
 @pytest.mark.parametrize("mode", ("prova", "fotolivro"))
 @pytest.mark.parametrize("background", ("branco", "cinza", "preto"))
 @pytest.mark.parametrize("shadow", (False, True))
@@ -193,16 +235,14 @@ def test_page_appearance_keeps_cover_photos_and_preview_pdf_identical(
         for index, page in enumerate(pdf):
             rendered = _render_at_width(page, 320)
             try:
-                assert rendered.tobytes() == preview[index].tobytes()
+                _identicas(rendered, preview[index])
             finally:
                 rendered.close()
         for index in range(1, pdf.page_count):
-            actual = [pdf.extract_image(image[0])["image"] for image in pdf[index].get_images(full=True)]
-            expected = [
-                base_pdf.extract_image(image[0])["image"]
-                for image in base_pdf[index].get_images(full=True)
-            ]
-            assert actual == expected
+            # Só as fotografias: a garantia é que mudar a aparência não recodifica
+            # nem toca uma foto. A aparência pode acrescentar arte própria — a
+            # sombra é desenhada como imagem borrada, porque PDF não tem desfoque.
+            assert _fotos_embutidas(pdf, index) == _fotos_embutidas(base_pdf, index)
 
     for image in (*base_preview, *preview):
         image.close()
@@ -222,7 +262,7 @@ def test_page_cycle_uses_the_same_page_appearance_as_export(tmp_path: Path):
     with pymupdf.open(output) as pdf:
         rendered = _render_at_width(pdf[cycled.page_number - 1], 320)
         try:
-            assert rendered.tobytes() == cycled.thumbnail.tobytes()
+            _identicas(rendered, cycled.thumbnail)
         finally:
             rendered.close()
     cycled.thumbnail.close()
