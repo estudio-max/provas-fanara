@@ -2118,3 +2118,72 @@ def test_a_finalidade_do_pdf_vale_so_na_exportacao(qapp):
         janela.close()
         janela.deleteLater()
         qapp.processEvents()
+
+
+def test_escolher_a_pasta_nao_apaga_a_identidade_ja_preenchida(qapp, tmp_path):
+    """O passo a passo pede a identidade na mesma tela da pasta.
+
+    `select_folder` montava um Config zerado e reescrevia a barra lateral com
+    ele: tudo que tivesse sido digitado antes sumia no clique seguinte — e essa
+    é exatamente a ordem que o guia ensina.
+    """
+    from provas.ui.main_window import MainWindow
+
+    primeira = tmp_path / "Ensaio Bianca"
+    segunda = tmp_path / "Casamento Ana"
+    for pasta in (primeira, segunda):
+        pasta.mkdir()
+        Image.new("RGB", (300, 450), (120, 90, 80)).save(pasta / "foto.jpg")
+
+    janela = MainWindow()
+    try:
+        janela.sidebar.studio_edit.setText("Estúdio Fanara")
+        janela.sidebar.site_edit.setText("fanara.com.br")
+        qapp.processEvents()
+
+        janela.select_folder(str(primeira))
+        qapp.processEvents()
+        assert janela.sidebar.studio_edit.text() == "Estúdio Fanara"
+        assert janela.sidebar.site_edit.text() == "fanara.com.br"
+        assert janela._draft_config.estudio == "Estúdio Fanara"
+        assert janela._draft_config.site == "fanara.com.br"
+        # Sem título escrito, o nome da pasta serve.
+        assert janela.sidebar.title_edit.text() == "Ensaio Bianca"
+
+        janela.sidebar.title_edit.setText("Priscila Art Dark")
+        qapp.processEvents()
+        janela.select_folder(str(segunda))
+        qapp.processEvents()
+        assert janela.sidebar.title_edit.text() == "Priscila Art Dark", (
+            "título escrito à mão não pode ser trocado pelo nome da pasta nova"
+        )
+        assert janela.sidebar.studio_edit.text() == "Estúdio Fanara"
+    finally:
+        janela.close()
+        janela.deleteLater()
+        qapp.processEvents()
+
+
+def test_o_titulo_herdado_da_pasta_anterior_cede_para_a_nova(qapp, tmp_path):
+    """O contrário também: título que o aplicativo derivou não gruda na sessão."""
+    from provas.ui.main_window import MainWindow
+
+    primeira = tmp_path / "Ensaio Bianca"
+    segunda = tmp_path / "Casamento Ana"
+    for pasta in (primeira, segunda):
+        pasta.mkdir()
+        Image.new("RGB", (300, 450), (120, 90, 80)).save(pasta / "foto.jpg")
+
+    janela = MainWindow()
+    try:
+        janela.select_folder(str(primeira))
+        qapp.processEvents()
+        assert janela.sidebar.title_edit.text() == "Ensaio Bianca"
+
+        janela.select_folder(str(segunda))
+        qapp.processEvents()
+        assert janela.sidebar.title_edit.text() == "Casamento Ana"
+    finally:
+        janela.close()
+        janela.deleteLater()
+        qapp.processEvents()

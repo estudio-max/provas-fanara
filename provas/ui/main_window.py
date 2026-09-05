@@ -69,6 +69,9 @@ class MainWindow(QMainWindow):
         self.status_kind = "idle"
         self.last_export_path = ""
         self._draft_config: Config | None = None
+        #: Último título derivado do nome da pasta, para saber se o que está no
+        #: campo foi escrito pelo fotógrafo ou só herdado da pasta anterior.
+        self._titulo_derivado: str = ""
         self._cancel_event: threading.Event | None = None
         self._threads: set[QThread] = set()
         self._workers: set[EditorialWorker] = set()
@@ -271,9 +274,22 @@ class MainWindow(QMainWindow):
         self.folder_path = normalized
         title = os.path.basename(normalized.rstrip("\\/")) or normalized
         mode = self.sidebar.mode
+        # O fotógrafo, o site e o logotipo são do estúdio, não do ensaio: trocar
+        # de pasta não pode apagá-los. Montar um Config zerado aqui descartava
+        # tudo que tivesse sido preenchido antes — que é justamente a ordem que
+        # o passo a passo ensina, com os campos na mesma tela da pasta.
+        identidade = self.sidebar.identity_values()
+        digitado = identidade["titulo"]
+        # O título nasce do nome da pasta. Um título que o fotógrafo escreveu
+        # sobrevive à troca; o que o aplicativo derivou sozinho é substituído.
+        titulo = title if not digitado or digitado == self._titulo_derivado else digitado
+        self._titulo_derivado = title
         self._draft_config = Config(
             pasta=normalized,
-            titulo=title,
+            titulo=titulo,
+            estudio=identidade["estudio"],
+            site=identidade["site"],
+            logo=identidade["logo"],
             modo=mode,
             marca_dagua=mode == "prova",
             mostrar_codigos=mode == "prova",

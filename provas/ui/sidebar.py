@@ -322,6 +322,10 @@ class WorkflowSidebar(QFrame):
             "logo": self.logo_path,
         }
 
+    def identity_values(self) -> dict[str, str]:
+        """O que está preenchido agora. A barra é a fonte da verdade da identidade."""
+        return self._identity_payload()
+
     def _emit_cover_identity(self) -> None:
         self.cover_identity_changed.emit(self._identity_payload())
 
