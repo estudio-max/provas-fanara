@@ -68,16 +68,58 @@ def test_a_etapa_de_acao_so_libera_avancar_quando_cumprida(qt_app: QApplication,
 
 
 def test_cumprir_a_etapa_avanca_sozinho(qt_app: QApplication, janela) -> None:
-    """Escolher a pasta leva à análise sem exigir um clique redundante."""
+    """Analisar leva ao acabamento sem exigir um clique redundante."""
     passo = WizardDialog(janela)
-    assert passo.contador.text() == "Passo 1 de 5"
+    passo._indice = 1          # para que serve este PDF
+    passo._mostrar_etapa()
+    assert passo.contador.text() == "Passo 2 de 5"
+    assert not ETAPAS[1].campos, "esta etapa é de ação pura; o avanço é automático"
+
+    # A etapa se considera cumprida quando há projeto e prévia; o resto do
+    # estado só interessa aos botões da barra lateral.
+    class EstadoFalso:
+        previous_plan = None
+        cache_keys = ()
+        photo_paths = ()
+
+        class config:
+            estilo_capa = "mosaico"
+
+        class plan:
+            pages = ()
+            cover_photo_ids = ()
 
     janela.folder_path = "C:/algum/ensaio"
+    janela.project_state = EstadoFalso()
+    janela.previews = ("uma prévia qualquer",)
     janela._sync_actions()
 
-    assert passo.contador.text() == "Passo 2 de 5"
-    assert _rotulos_de_acao(passo) == ["Analisar como prova", "Analisar como fotolivro"]
+    assert passo.contador.text() == "Passo 3 de 5"
     passo.deleteLater()
+
+
+def test_a_etapa_da_pasta_espera_o_fotografo_preencher(qt_app: QApplication, janela) -> None:
+    """Escolher a pasta cumpria a etapa e levava embora a identidade.
+
+    Os campos de título, fotógrafo e site vivem nessa mesma tela: avançar
+    sozinho no clique da pasta os tirava da frente antes de serem preenchidos.
+    """
+    passo = WizardDialog(janela)
+    try:
+        assert ETAPAS[0].campos, "é a etapa que pede a identidade"
+        assert passo.contador.text() == "Passo 1 de 5"
+
+        janela.folder_path = "C:/algum/ensaio"
+        janela._sync_actions()
+        qt_app.processEvents()
+
+        assert passo.contador.text() == "Passo 1 de 5", (
+            "a etapa com campos não pode avançar sozinha"
+        )
+        assert passo.avancar.isEnabled(), "mas o avanço fica liberado"
+    finally:
+        passo.deleteLater()
+        qt_app.processEvents()
 
 
 def test_a_etapa_de_escolha_nao_trava_o_avanco(qt_app: QApplication, janela) -> None:
@@ -272,12 +314,11 @@ def test_a_etapa_da_pasta_pede_a_identidade_e_escreve_na_barra_lateral(qt_app, j
     passo = WizardDialog(janela)
     try:
         assert ETAPAS[0].campos, "a etapa da pasta precisa pedir a identidade"
-        campos = passo.campos
-        rotulos = [campos.itemAt(i, campos.ItemRole.LabelRole).widget().text()
-                   for i in range(campos.rowCount())]
-        assert rotulos == ["Título", "Fotógrafo / estúdio", "Site"]
+        assert [rotulo for rotulo, _atributo in ETAPAS[0].campos] == [
+            "Título", "Fotógrafo / estúdio", "Site"
+        ]
 
-        entrada = campos.itemAt(1, campos.ItemRole.FieldRole).widget()
+        entrada = _campos_do_passo(passo)[janela.sidebar.studio_edit]
         assert isinstance(entrada, QLineEdit)
         entrada.setText("Estúdio Fanara")
         entrada.textEdited.emit("Estúdio Fanara")
@@ -359,3 +400,69 @@ def test_cada_estilo_de_capa_tem_ilustracao_empacotada() -> None:
         assert recursos.caminho(f"passo-a-passo/{nome}.jpg").is_file(), (
             f"falta a ilustração de {estilo}"
         )
+
+
+def _campos_do_passo(passo) -> dict:
+    """Campo do guia indexado pelo campo da barra que ele espelha."""
+    return {espelho: campo for campo, espelho in passo._espelhos}
+
+
+def test_identidade_digitada_no_guia_sobrevive_a_escolha_da_pasta(qt_app, janela, tmp_path):
+    """O relato foi este: preencher no guia, exportar, e achar a barra vazia.
+
+    Os campos do guia são widgets próprios; escrever neles escrevia na barra,
+    mas `select_folder` zerava a barra logo em seguida. O guia seguia mostrando
+    o texto e a barra não — dois valores diferentes para a mesma coisa.
+    """
+    from PIL import Image
+
+    pasta = tmp_path / "Ensaio Priscila"
+    pasta.mkdir()
+    Image.new("RGB", (300, 450), (100, 80, 90)).save(pasta / "foto.jpg")
+
+    passo = WizardDialog(janela)
+    try:
+        campos = _campos_do_passo(passo)
+        for espelho, valor in ((janela.sidebar.studio_edit, "Estúdio Fanara"),
+                               (janela.sidebar.site_edit, "fanara.com.br")):
+            campos[espelho].setText(valor)
+            campos[espelho].textEdited.emit(valor)
+        qt_app.processEvents()
+
+        janela.select_folder(str(pasta))
+        passo._sincronizar()
+        qt_app.processEvents()
+
+        assert janela.sidebar.studio_edit.text() == "Estúdio Fanara"
+        assert janela.sidebar.site_edit.text() == "fanara.com.br"
+        # E os dois lados têm de contar a mesma história.
+        campos = _campos_do_passo(passo)
+        for espelho in (janela.sidebar.studio_edit, janela.sidebar.site_edit,
+                        janela.sidebar.title_edit):
+            assert campos[espelho].text() == espelho.text(), (
+                "guia e barra lateral mostram valores diferentes"
+            )
+        assert janela.sidebar.title_edit.text() == "Ensaio Priscila"
+    finally:
+        passo.close()
+        passo.deleteLater()
+        qt_app.processEvents()
+
+
+def test_o_campo_em_foco_nao_e_reescrito_no_meio_da_digitacao(qt_app, janela):
+    """Reespelhar sem checar o foco faria o cursor pular a cada tecla."""
+    passo = WizardDialog(janela)
+    try:
+        campo = _campos_do_passo(passo)[janela.sidebar.site_edit]
+        campo.setFocus()
+        campo.setText("fanara.com")
+        janela.sidebar.site_edit.setText("outro.com.br")
+        passo._sincronizar()
+        qt_app.processEvents()
+
+        if campo.hasFocus():
+            assert campo.text() == "fanara.com", "o campo em foco foi reescrito"
+    finally:
+        passo.close()
+        passo.deleteLater()
+        qt_app.processEvents()

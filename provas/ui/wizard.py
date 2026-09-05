@@ -251,6 +251,8 @@ class WizardDialog(QDialog):
 
         self._indice = 0
         self._botoes_acao: list[QPushButton] = []
+        #: Pares (campo do passo a passo, campo da barra lateral) da etapa atual.
+        self._espelhos: list[tuple[QLineEdit, QLineEdit]] = []
         self._acao_do_botao: dict[QPushButton, str] = {}
         self._estava_ocupada = False
         self._pixmaps: dict[str, QPixmap] = {}
@@ -446,6 +448,7 @@ class WizardDialog(QDialog):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+        self._espelhos.clear()
         for rotulo, atributo in etapa.campos:
             espelho = getattr(self.janela.sidebar, atributo, None)
             if espelho is None:
@@ -458,6 +461,7 @@ class WizardDialog(QDialog):
             campo.textEdited.connect(
                 lambda texto, alvo=espelho: alvo.setText(texto)
             )
+            self._espelhos.append((campo, espelho))
             self.campos.addRow(rotulo, campo)
 
         while self.acoes.count():
@@ -511,6 +515,15 @@ class WizardDialog(QDialog):
         """Habilita, marca e informa, conforme o estado atual do projeto."""
         ocupada = bool(getattr(self.janela, "is_busy", False))
         etapa = self.etapa
+
+        # A barra lateral é a fonte da verdade e pode mudar por fora daqui —
+        # ao abrir um projeto, por exemplo. Sem reespelhar, o passo a passo
+        # segue exibindo um texto que a barra já não tem, e quem fecha a janela
+        # encontra dois valores diferentes. Campo em foco não é tocado, senão o
+        # cursor pularia no meio da digitação.
+        for campo, espelho in self._espelhos:
+            if not campo.hasFocus() and campo.text() != espelho.text():
+                campo.setText(espelho.text())
         escolhidas = etapa.escolha_atual(self.janela) if etapa.escolha_atual else frozenset()
 
         for botao in self._botoes_acao:
@@ -549,9 +562,12 @@ class WizardDialog(QDialog):
         anterior = self.etapa
         self._sincronizar()
         # Etapa de ação cumprida: segue sozinho, para o passo a passo acompanhar
-        # o trabalho em vez de esperar um clique redundante.
+        # o trabalho em vez de esperar um clique redundante. Etapa com campos é
+        # exceção: escolher a pasta cumpria a etapa e levava embora a identidade
+        # ainda por preencher, na mesma tela. Ali o avanço é do fotógrafo.
         if (
             not anterior.opcional
+            and not anterior.campos
             and self._indice < len(ETAPAS) - 1
             and anterior.concluida(self.janela)
             and not getattr(self.janela, "is_busy", False)
