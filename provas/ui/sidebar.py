@@ -22,6 +22,24 @@ from PySide6.QtWidgets import (
 )
 
 
+#: Rótulo e chave de cada estilo, na ordem em que aparecem. Os três primeiros
+#: são os originais; os oito seguintes vêm do guia editorial e desenham a
+#: própria tipografia.
+ESTILOS_DE_CAPA = (
+    ("Clássica", "classica"),
+    ("Mosaico editorial", "mosaico"),
+    ("Curvas editoriais", "curvas_editoriais"),
+    ("Jornada · foto e coluna de texto", "jornada"),
+    ("Toscana · moldura clássica", "toscana"),
+    ("Neon · sangria e título vertical", "neon"),
+    ("Fluir · sangria e texto claro", "fluir"),
+    ("Ritmos · grade de quatro", "ritmos"),
+    ("Fragmentos · colagem diagonal", "fragmentos"),
+    ("Contrastes · mosaico e título girado", "contrastes"),
+    ("Caminho · três fotos em sequência", "caminho"),
+)
+
+
 class WorkflowSidebar(QFrame):
     folder_requested = Signal()
     analysis_requested = Signal()
@@ -153,9 +171,8 @@ class WorkflowSidebar(QFrame):
         layout.addSpacing(6)
         self.cover_style = QComboBox()
         self.cover_style.setAccessibleName("Estilo da capa")
-        self.cover_style.addItem("Clássica", "classica")
-        self.cover_style.addItem("Mosaico editorial", "mosaico")
-        self.cover_style.addItem("Curvas editoriais", "curvas_editoriais")
+        for rotulo, chave in ESTILOS_DE_CAPA:
+            self.cover_style.addItem(rotulo, chave)
         self.cover_style.currentIndexChanged.connect(self._emit_cover_style)
         layout.addWidget(self.cover_style)
 

@@ -39,11 +39,14 @@ def test_config_defaults_include_classic_cover_settings(tmp_path: Path):
 def test_config_defaults_validate_unknown_cover_style_in_portuguese(tmp_path: Path):
     from provas.motor import Config
 
-    with pytest.raises(
-        ValueError,
-        match="Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.",
-    ):
+    from provas.capas import COVER_STYLES
+
+    with pytest.raises(ValueError) as erro:
         Config(str(tmp_path), estilo_capa="desconhecido").com_padroes()
+
+    # A mensagem nomeia as saídas: quem errou o estilo precisa ver as válidas.
+    assert "Estilo de capa inválido" in str(erro.value)
+    assert all(estilo in str(erro.value) for estilo in COVER_STYLES)
 
 
 def test_classica_cover_selection_uses_the_approved_deterministic_priority(monkeypatch):

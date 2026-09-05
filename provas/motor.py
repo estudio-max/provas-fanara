@@ -669,6 +669,21 @@ def _render_cover(
             cover = capas.gerar(
                 "mosaico", [photo.image for photo in cover_photos], width, height, doc.p_capa
             )
+        elif config.estilo_capa in capas.ESTILOS_EDITORIAIS:
+            # Os editoriais desenham a própria tipografia; o subtítulo entra
+            # aqui porque `IdentityData` só carrega título, estúdio, site e logo.
+            cover = capas.gerar(
+                config.estilo_capa,
+                cover_photos,
+                width,
+                height,
+                doc.p_capa,
+                identity=IdentityData(
+                    config.titulo, config.estudio, config.site, config.logo
+                ),
+                seed=plan.seed,
+                subtitulo=config.subtitulo,
+            )
         elif config.estilo_capa == "curvas_editoriais":
             cover = capas.gerar(
                 "curvas_editoriais",

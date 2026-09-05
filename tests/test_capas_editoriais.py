@@ -3,78 +3,153 @@ from __future__ import annotations
 import pytest
 from PIL import Image
 
-from provas import tema
+from provas import cor_capa
+from provas.capas_editoriais import ESTILOS_EDITORIAIS
+from provas.tipografia_capas import PARES, familias_ausentes, par
+
+LARGURA, ALTURA = 842, 595       # A4 paisagem, a medida do guia
 
 
-def test_editorial_mosaic_renders_title_safe_colored_cover():
-    from provas.capas import gerar_mosaico_editorial
-
-    colors = (
-        (235, 48, 48), (48, 190, 65), (45, 100, 235),
-        (230, 200, 45), (210, 55, 180), (40, 205, 195),
-        (242, 130, 40), (130, 70, 215), (85, 170, 90),
-    )
-    items = [Image.new("RGB", (180 + index * 3, 120 + index * 2), color) for index, color in enumerate(colors)]
-    palette = tema.paleta("#16161A")
-
-    cover = gerar_mosaico_editorial(items, 1600, 1131, palette)
-
-    assert cover.imagem.size == (1600, 1131)
-    assert 0.60 <= cover.ancora <= 0.85
-    safe_y = int(cover.imagem.height * (cover.ancora + 0.05))
-    assert cover.imagem.getpixel((cover.imagem.width // 2, safe_y)) == palette.fundo_rgb
-    pixels = list(cover.imagem.get_flattened_data())
-    assert all(color in pixels for color in colors)
+def _fotos(quantidade: int = 4) -> list[Image.Image]:
+    """Fotografias sintéticas com cores distintas, para as peças se distinguirem."""
+    cores = ((190, 70, 60), (60, 120, 190), (90, 160, 90), (200, 170, 80))
+    return [Image.new("RGB", (900, 600) if indice % 2 else (600, 900), cores[indice % 4])
+            for indice in range(quantidade)]
 
 
-def test_gerar_dispatches_mosaic_explicitly_and_rejects_unknown_style():
-    from provas.capas import gerar
+@pytest.mark.parametrize("nome", sorted(ESTILOS_EDITORIAIS))
+def test_cada_estilo_entrega_a_capa_no_tamanho_pedido(nome: str) -> None:
+    funcao, multiplas = ESTILOS_EDITORIAIS[nome]
+    fotos = _fotos()
+    arte = funcao(fotos if multiplas else fotos[0], LARGURA, ALTURA,
+                  "O silêncio da viagem", "Uma jornada pelas paisagens")
 
-    items = [Image.new("RGB", (80, 120), (200, 20, 20)), Image.new("RGB", (120, 80), (20, 200, 20))]
-    palette = tema.paleta()
-
-    generated = gerar("mosaico", items, 320, 226, palette)
-
-    assert generated.ancora >= 0.60
-    with pytest.raises(ValueError, match="Estilo de capa inválido"):
-        gerar("unknown", items, 320, 226, palette)
+    assert arte.imagem.size == (LARGURA, ALTURA)
+    assert arte.imagem.mode == "RGB"
 
 
-def test_gerar_dispatches_curved_cover_with_identity_and_seed(monkeypatch):
+@pytest.mark.parametrize("nome", sorted(ESTILOS_EDITORIAIS))
+def test_cada_estilo_desenha_o_texto_na_propria_arte(nome: str) -> None:
+    """A capa editorial embute a tipografia; sem isso o título sumiria."""
+    funcao, multiplas = ESTILOS_EDITORIAIS[nome]
+    fotos = _fotos()
+    entrada = fotos if multiplas else fotos[0]
+    com_texto = funcao(entrada, LARGURA, ALTURA, "Fragmentos", "Subtítulo")
+    sem_texto = funcao(entrada, LARGURA, ALTURA, "", "")
+
+    assert com_texto.imagem.tobytes() != sem_texto.imagem.tobytes()
+
+
+@pytest.mark.parametrize("nome", sorted(ESTILOS_EDITORIAIS))
+def test_estilos_de_varias_fotos_aceitam_uma_so(nome: str) -> None:
+    """Ensaio curto não pode quebrar a capa: as peças repetem a foto disponível."""
+    funcao, multiplas = ESTILOS_EDITORIAIS[nome]
+    uma = _fotos(1)
+    arte = funcao(uma if multiplas else uma[0], LARGURA, ALTURA, "Título", "")
+
+    assert arte.imagem.size == (LARGURA, ALTURA)
+
+
+@pytest.mark.parametrize("nome", sorted(ESTILOS_EDITORIAIS))
+def test_medidas_invalidas_falham_alto(nome: str) -> None:
+    funcao, multiplas = ESTILOS_EDITORIAIS[nome]
+    fotos = _fotos()
+    with pytest.raises(ValueError):
+        funcao(fotos if multiplas else fotos[0], 0, ALTURA, "Título", "")
+
+
+def test_titulo_longo_encolhe_em_vez_de_transbordar() -> None:
+    """O corpo cede antes de a capa estourar — mas a capa sai do mesmo tamanho."""
+    from provas.capas_editoriais import jornada
+
+    curto = jornada(_fotos(1)[0], LARGURA, ALTURA, "Sol", "")
+    longo = jornada(_fotos(1)[0], LARGURA, ALTURA,
+                    "Um título absurdamente longo que jamais caberia na coluna", "")
+
+    assert curto.imagem.size == longo.imagem.size == (LARGURA, ALTURA)
+
+
+# --- cor extraída ---------------------------------------------------------
+
+def test_foto_acromatica_cai_no_grafite() -> None:
+    """Inventar cor onde não há seria pior que não ter."""
+    cinza = Image.new("RGB", (200, 200), (128, 128, 128))
+
+    assert cor_capa.cor_dominante(cinza) is None
+    assert cor_capa.fundo_da_capa(cinza) == cor_capa.GRAFITE
+    assert cor_capa.fundo_claro_da_capa(cinza) == cor_capa.MARFIM
+
+
+def test_a_cor_do_fundo_nasce_da_matiz_da_foto() -> None:
+    import colorsys
+
+    azul = Image.new("RGB", (200, 200), (30, 90, 200))
+    fundo = cor_capa.fundo_da_capa(azul)
+    matiz_foto = colorsys.rgb_to_hsv(30 / 255, 90 / 255, 200 / 255)[0]
+    matiz_fundo = colorsys.rgb_to_hsv(*(canal / 255 for canal in fundo))[0]
+
+    assert matiz_fundo == pytest.approx(matiz_foto, abs=0.04)
+    assert cor_capa.cor_do_texto(fundo) == (250, 250, 252), "fundo escuro pede texto claro"
+
+
+def test_o_texto_troca_de_cor_conforme_o_fundo() -> None:
+    assert cor_capa.cor_do_texto((250, 248, 244)) == (24, 25, 29)
+    assert cor_capa.cor_do_texto((28, 30, 36)) == (250, 250, 252)
+
+
+# --- tipografia -----------------------------------------------------------
+
+@pytest.mark.parametrize("nome", sorted(PARES))
+def test_todo_par_resolve_alguma_fonte(nome: str) -> None:
+    """Família ausente cai na substituta; a capa nunca fica sem tipografia."""
+    combinacao = par(nome)
+
+    assert combinacao.titulo.arquivo or combinacao.titulo.embutida
+    assert combinacao.subtitulo.arquivo or combinacao.subtitulo.embutida
+
+
+def test_par_desconhecido_falha_com_as_opcoes() -> None:
+    with pytest.raises(ValueError, match="Par tipográfico desconhecido"):
+        par("inventado")
+
+
+def test_o_diagnostico_lista_o_que_falta_empacotar() -> None:
+    """Serve para saber se a capa está saindo com a fonte certa ou com a reserva."""
+    ausentes = familias_ausentes()
+
+    assert isinstance(ausentes, tuple)
+    assert all(nome.endswith(".ttf") for nome in ausentes)
+
+
+def test_a_barra_lateral_oferece_exatamente_os_estilos_do_motor() -> None:
+    """Um estilo sem entrada é inalcançável; uma entrada sem estilo quebra ao clicar."""
+    from provas.capas import COVER_STYLES
+    from provas.ui.sidebar import ESTILOS_DE_CAPA
+
+    oferecidos = [chave for _rotulo, chave in ESTILOS_DE_CAPA]
+
+    assert oferecidos == list(COVER_STYLES)
+    assert len({rotulo for rotulo, _ in ESTILOS_DE_CAPA}) == len(ESTILOS_DE_CAPA)
+
+
+@pytest.mark.parametrize("estilo", sorted(ESTILOS_EDITORIAIS))
+def test_o_motor_monta_cada_estilo_editorial(estilo: str) -> None:
+    """Da chave à arte: o caminho que o aplicativo percorre ao trocar a capa."""
     from provas import capas
     from provas.identidade_capa import IdentityData
 
-    image = Image.new("RGB", (80, 120), (20, 80, 140))
-    items = [capas.CoverPhoto("photo", image)]
-    identity = IdentityData("Ensaio", "Estúdio", "site.example")
-    expected = capas.Capa(Image.new("RGB", (16, 11)), 0.34, identity_embedded=True)
-    observed = []
+    fotos = [capas.CoverPhoto(str(indice), imagem)
+             for indice, imagem in enumerate(_fotos())]
+    capa = capas.gerar(estilo, fotos, LARGURA, ALTURA, None,
+                       identity=IdentityData("Título", "Estúdio", "site", ""),
+                       subtitulo="Subtítulo")
 
-    def curved(photos, width, height, palette, supplied_identity, seed):
-        observed.append((photos, width, height, palette, supplied_identity, seed))
-        return expected
-
-    monkeypatch.setattr(capas, "gerar_curvas_editoriais", curved)
-
-    actual = capas.gerar(
-        "curvas_editoriais", items, 320, 226, tema.paleta(), identity=identity, seed=37
-    )
-
-    assert actual is expected
-    assert observed == [(items, 320, 226, tema.paleta(), identity, 37)]
-    expected.imagem.close()
-    image.close()
+    assert capa.imagem.size == (LARGURA, ALTURA)
+    assert capa.identity_embedded, "o estilo editorial desenha o próprio texto"
 
 
-def test_legacy_cover_constructor_remains_valid_with_identity_metadata_defaults():
-    from provas.capas import Capa
+def test_estilo_editorial_sem_identidade_falha_claro() -> None:
+    from provas import capas
 
-    image = Image.new("RGB", (16, 11), (20, 20, 20))
-
-    cover = Capa(image, 0.72)
-
-    assert cover.imagem is image
-    assert cover.ancora == 0.72
-    assert cover.identity_embedded is False
-    assert cover.warnings == ()
-    assert cover.used_photo_ids == ()
+    with pytest.raises(ValueError, match="exige os dados de identidade"):
+        capas.gerar("jornada", _fotos(), LARGURA, ALTURA, None)

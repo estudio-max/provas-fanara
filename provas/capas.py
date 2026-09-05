@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 
 from . import imagens, tema
 from .capa_curvas import layout_orbita, render_mask
+from .capas_editoriais import ESTILOS_EDITORIAIS
 from .enquadramento import MIN_FACE_CONFIDENCE, FrameResult, frame_for_mask
 from .identidade_capa import CoverWarning, IdentityData, logo_is_renderable, render_identity
 from .modelos import PhotoInfo
@@ -18,8 +19,16 @@ from .modelos import PhotoInfo
 if TYPE_CHECKING:
     from .capa_classica import ClassicCrop
 
-COVER_STYLES = ("classica", "mosaico", "curvas_editoriais")
+#: Os três originais primeiro, depois os oito editoriais. A ordem é a que
+#: aparece para quem escolhe, então os conhecidos vêm antes.
+COVER_STYLES = (
+    "classica", "mosaico", "curvas_editoriais",
+    "jornada", "toscana", "neon", "fluir",
+    "ritmos", "fragmentos", "contrastes", "caminho",
+)
 ESTILOS = COVER_STYLES
+#: Reexportado para o motor não precisar conhecer o módulo interno.
+ESTILOS_EDITORIAIS = ESTILOS_EDITORIAIS
 
 SUPERAMOSTRAGEM = 3          # desenha a máscara ampliada e reduz, para borda lisa
 
@@ -195,7 +204,9 @@ def _faces_inside_curve_mask(frame: FrameResult, slot, mask: Image.Image) -> boo
 def validate_cover_style(value: str) -> str:
     """Return a supported cover style or explain the valid choices in PT-BR."""
     if value not in COVER_STYLES:
-        raise ValueError("Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.")
+        raise ValueError(
+            "Estilo de capa inválido. Use um de: " + ", ".join(COVER_STYLES) + "."
+        )
     return value
 
 
@@ -429,6 +440,35 @@ def _destaque(miniaturas: list[Image.Image], largura: int, altura: int,
     return fundo
 
 
+def _gerar_editorial(
+    estilo: str,
+    miniaturas,
+    largura: int,
+    altura: int,
+    identity: IdentityData | None,
+    subtitulo: str,
+) -> Capa:
+    """Adapta um estilo editorial ao contrato da capa.
+
+    Estes estilos desenham a própria tipografia, então a âncora não é usada e
+    `identity_embedded` avisa quem chama que não há mais texto a compor.
+    """
+    if identity is None:
+        raise ValueError(f"A capa {estilo} exige os dados de identidade.")
+    funcao, varias = ESTILOS_EDITORIAIS[estilo]
+    imagens_capa = [
+        item.image if isinstance(item, CoverPhoto) else item for item in miniaturas
+    ]
+    if not imagens_capa:
+        raise ValueError(f"A capa {estilo} exige ao menos uma fotografia.")
+    arte = funcao(
+        imagens_capa if varias else imagens_capa[0],
+        largura, altura, identity.title, subtitulo,
+    )
+    return Capa(arte.imagem, 1.0, identity_embedded=True,
+                used_photo_ids=arte.fotos_usadas)
+
+
 def gerar(
     estilo: str,
     miniaturas: list[Image.Image] | list[CoverPhoto],
@@ -438,9 +478,12 @@ def gerar(
     *,
     identity: IdentityData | None = None,
     seed: int = 0,
+    subtitulo: str = "",
 ) -> Capa:
     """Monta a capa no estilo pedido e diz onde o texto deve começar."""
     validate_cover_style(estilo)
+    if estilo in ESTILOS_EDITORIAIS:
+        return _gerar_editorial(estilo, miniaturas, largura, altura, identity, subtitulo)
     if estilo == "mosaico":
         return gerar_mosaico_editorial(miniaturas, largura, altura, paleta)  # type: ignore[arg-type]
     if identity is None:

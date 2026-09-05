@@ -237,11 +237,13 @@ def test_project_config_rejects_invalid_cover_framing():
 def test_project_config_rejects_unknown_cover_style_in_portuguese(tmp_path: Path):
     from provas.projeto import ProjectConfig
 
-    with pytest.raises(
-        ValueError,
-        match="Estilo de capa inválido. Use classica, mosaico ou curvas_editoriais.",
-    ):
+    from provas.capas import COVER_STYLES
+
+    with pytest.raises(ValueError) as erro:
         ProjectConfig(pasta=str(tmp_path), estilo_capa="desconhecido")
+
+    assert "Estilo de capa inválido" in str(erro.value)
+    assert all(estilo in str(erro.value) for estilo in COVER_STYLES)
 
 
 def test_project_state_snapshots_config_so_external_or_direct_mutation_cannot_diverge_seed(tmp_path: Path):

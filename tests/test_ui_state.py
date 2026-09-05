@@ -190,20 +190,18 @@ def test_save_project_dialog_suggests_the_exact_product_filename(qapp, tmp_path:
     ]
 
 
-def test_sidebar_exposes_three_cover_styles_and_accessible_identity_fields(qapp):
-    from provas.ui.sidebar import WorkflowSidebar
+def test_sidebar_exposes_every_cover_style_and_accessible_identity_fields(qapp):
+    from provas.capas import COVER_STYLES
+    from provas.ui.sidebar import ESTILOS_DE_CAPA, WorkflowSidebar
 
     sidebar = WorkflowSidebar()
 
-    assert [sidebar.cover_style.itemData(index) for index in range(sidebar.cover_style.count())] == [
-        "classica",
-        "mosaico",
-        "curvas_editoriais",
-    ]
-    assert [sidebar.cover_style.itemText(index) for index in range(sidebar.cover_style.count())] == [
-        "Clássica",
-        "Mosaico editorial",
-        "Curvas editoriais",
+    # Um estilo do motor sem entrada aqui seria inalcançável pela interface.
+    assert [sidebar.cover_style.itemData(index)
+            for index in range(sidebar.cover_style.count())] == list(COVER_STYLES)
+    assert [sidebar.cover_style.itemText(index)
+            for index in range(sidebar.cover_style.count())] == [
+        rotulo for rotulo, _chave in ESTILOS_DE_CAPA
     ]
     assert sidebar.title_edit.accessibleName() == "Título da capa"
     assert sidebar.studio_edit.accessibleName() == "Nome do fotógrafo ou estúdio"
