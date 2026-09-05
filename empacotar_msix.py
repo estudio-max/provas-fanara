@@ -6,10 +6,6 @@ Reaproveita o executável que o `empacotar.py` produz (`dist/Fanara - Fotolivro/
 e o embrulha num MSIX com o manifesto, os logotipos de bloco e o índice de
 recursos. Sai em `dist/Fanara - Fotolivro-<versão>-x64.msix`.
 
-ANTES DE ENVIAR PARA A STORE, troque os três valores abaixo pelos que o
-Partner Center mostra em "Identidade do produto" depois de reservar o nome do
-app. Eles têm de bater exatamente, senão o envio é recusado.
-
 Para testar na própria máquina não é preciso assinar nem mexer nos valores:
 com o Modo de Desenvolvedor ligado, instale a pasta montada direto —
 
@@ -29,9 +25,14 @@ from empacotar import NOME, RAIZ, gerar_icone, remover_dados_usuario
 from provas.recursos import ORGANIZATION_NAME, VERSION
 
 # --- Partner Center → Identidade do produto -------------------------------
-IDENTIDADE = "EstudioFanara.FanaraFotolivro"   # "Nome do pacote"
-PUBLICADOR = "CN=Estudio Fanara"               # "Publicador" (vem como CN=<GUID>)
-NOME_PUBLICADOR = ORGANIZATION_NAME            # "Nome de exibição do publicador"
+# Copiados de Partner Center > Fanara Fotolivro > Identidade do produto, do
+# produto MSIX (Store ID 9NM0LV9V135F). Têm de bater exatamente: a Store recusa
+# o envio se divergirem. Repare que a Microsoft tira o acento de "Estúdio" no
+# nome do pacote, mas o mantém no nome de exibição.
+IDENTIDADE = "EstdioFanara.FanaraFotolivro"                 # "Nome do pacote"
+PUBLICADOR = "CN=12E00B3F-F6C2-4C38-A1D8-F1E54FE1BCAA"      # "Publicador"
+NOME_PUBLICADOR = ORGANIZATION_NAME                         # "Nome de exibição"
+STORE_ID = "9NM0LV9V135F"                                   # apps.microsoft.com/detail/…
 # --------------------------------------------------------------------------
 
 # A Store exige que o último número da versão seja 0; o resto vem da fonte única.
