@@ -83,10 +83,14 @@ QLabel#statusBanner {
     border-radius: 4px;
 }
 
+/* Carregando era quase a cor do painel, e passava despercebido ao lado do
+   verde de sucesso e do vermelho de erro. A borda usa o rosa da marca em
+   força total: distingue sem alarmar como um erro. */
 QLabel#statusBanner[kind="loading"] {
-    color: #E6D7DD;
-    background: #2A2025;
-    border-color: #55303B;
+    color: #FFE6EC;
+    background: #3C2530;
+    border-color: #C53252;
+    font-weight: 600;
 }
 
 QLabel#statusBanner[kind="error"] {
@@ -164,7 +168,13 @@ QPushButton:pressed {
     border-color: #D84060;
 }
 
-QPushButton:focus, QRadioButton:focus, QCheckBox:focus, QListWidget:focus {
+QPushButton:focus, QRadioButton:focus, QListWidget:focus {
+    border: 2px solid #E04C6B;
+}
+
+/* A caixa de seleção ocupa a largura toda: uma borda nela desenhava um
+   retângulo atravessando o diálogo. O foco marca só o quadradinho. */
+QCheckBox::indicator:focus {
     border: 2px solid #E04C6B;
 }
 
@@ -471,7 +481,7 @@ QToolTip {
     padding: 8px;
 }
 
-QDialog#welcomeDialog, QDialog#welcomeDialog QWidget {
+QDialog#wizardDialog, QDialog#wizardDialog QWidget {
     background: #191A1F;
 }
 
@@ -481,17 +491,42 @@ QLabel#welcomeTitle {
     font-weight: 600;
 }
 
-QLabel#welcomeStepNumber {
-    color: #C53252;
-    background: #23161B;
-    border: 1px solid #3A2028;
-    border-radius: 13px;
-    min-width: 26px;
-    max-width: 26px;
-    min-height: 26px;
-    max-height: 26px;
-    font-size: 12px;
+QLabel#wizardCounter {
+    color: #6E6E76;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+}
+
+QLabel#wizardStepTitle {
+    color: #F1F1F3;
+    font-size: 20px;
     font-weight: 600;
+}
+
+QLabel#wizardNote {
+    color: #A9AAB3;
+    background: #1D1E24;
+    border-left: 2px solid #C53252;
+    padding: 10px 14px;
+    font-size: 12px;
+}
+
+QPushButton#wizardAction {
+    background: #23161B;
+    border: 1px solid #47252F;
+    color: #F1D9DF;
+    padding: 8px 16px;
+}
+
+QPushButton#wizardAction:hover {
+    background: #2E1B22;
+    border-color: #C53252;
+}
+
+QPushButton#wizardAction:disabled {
+    background: #1D1E24;
+    border-color: #2C2D34;
+    color: #55565E;
 }
 
 QFrame#welcomeFooter {
@@ -501,4 +536,51 @@ QFrame#welcomeFooter {
 QLabel#welcomeFinePrint {
     color: #6E6E76;
     font-size: 11px;
+}
+
+QPushButton#wizardAction[ativo="true"] {
+    background: #C53252;
+    border-color: #C53252;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+QPushButton#wizardAction[ativo="true"]:hover {
+    background: #D8405F;
+    border-color: #D8405F;
+}
+
+QLabel#wizardBusy {
+    color: #E0A34C;
+    font-size: 12px;
+    padding: 8px 0 0 0;
+}
+
+QProgressBar#previewBusyBar {
+    background: #2A2B31;
+    border: none;
+    border-radius: 2px;
+}
+
+QProgressBar#previewBusyBar::chunk {
+    background: #C53252;
+    border-radius: 2px;
+}
+
+QLabel#previewBusyLabel {
+    color: #A9AAB3;
+    font-size: 12px;
+}
+
+QFrame#wizardExample {
+    background: #131418;
+    border-right: 1px solid #2C2D34;
+}
+
+QLabel#wizardExampleImage {
+    background: transparent;
+}
+
+QWidget#wizardColumn {
+    background: #191A1F;
 }

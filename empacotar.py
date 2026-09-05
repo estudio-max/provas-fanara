@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import glob
 import os
 from pathlib import Path
 import shutil
@@ -71,6 +72,10 @@ def dados_pyinstaller() -> list[str]:
         (os.path.join(RAIZ, "assets", "icone.ico"), "assets"),
         (os.path.join(RAIZ, "assets", "fonts", "BodoniModa[opsz,wght].ttf"), "assets/fonts"),
         (os.path.join(RAIZ, "assets", "fonts", "OFL-BodoniModa.txt"), "assets/fonts"),
+        *(
+            (caminho, "assets/passo-a-passo")
+            for caminho in sorted(glob.glob(os.path.join(RAIZ, "assets", "passo-a-passo", "*.jpg")))
+        ),
     )
     if not os.path.isfile(cascade):
         raise FileNotFoundError(f"Cascade Haar local não encontrado: {cascade}")
