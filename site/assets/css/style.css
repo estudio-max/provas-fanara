@@ -427,6 +427,13 @@ section {
   color: var(--text-muted);
 }
 
+.covers-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+
 /* ---------- modes split ---------- */
 
 .modes {
@@ -676,6 +683,9 @@ footer .foot-links a:hover {
   .covers-side {
     grid-template-columns: 1fr 1fr;
   }
+  .covers-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -693,6 +703,9 @@ footer .foot-links a:hover {
     grid-template-columns: 1fr;
   }
   .covers-side {
+    grid-template-columns: 1fr;
+  }
+  .covers-grid {
     grid-template-columns: 1fr;
   }
   section {
