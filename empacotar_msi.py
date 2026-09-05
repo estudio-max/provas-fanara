@@ -31,6 +31,10 @@ import sys
 from empacotar import NOME, RAIZ, gerar_icone, remover_dados_usuario
 from provas.recursos import ORGANIZATION_NAME, VERSION
 
+# Instalação por usuário, em %LocalAppData%\Programs. Por máquina o pacote
+# exigiria elevação, e `msiexec /quiet` não pode abrir o UAC — ele aborta com
+# 1603/1925, que é o que impede a validação da Store de instalar o aplicativo.
+#
 # Fixo entre versões: é o que permite ao Windows Installer saber que duas
 # versões são o "mesmo" produto e fazer upgrade em vez de instalar em paralelo.
 # Não troque isto depois de publicado.
@@ -51,6 +55,7 @@ WXS = r"""<?xml version="1.0" encoding="utf-8"?>
            Version="{versao}"
            UpgradeCode="{upgrade_code}"
            Language="1046"
+           Scope="perUser"
            InstallerVersion="500">
 
     <SummaryInformation Manufacturer="{fabricante}" Description="Instalador do {nome}" />
@@ -63,8 +68,10 @@ WXS = r"""<?xml version="1.0" encoding="utf-8"?>
     <Property Id="ARPHELPLINK" Value="https://fanara.com.br" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
-    <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="{nome}" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="{nome}" />
+      </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="AppMenuFolder" Name="{nome}" />

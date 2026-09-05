@@ -14,3 +14,7 @@ tmp/
 
 # Instaladores publicados no site: pesados e reconstruíveis por empacotar_msi.py
 site/downloads/
+
+# Renders intermediários do passo a passo: o que embarca são os .jpg
+# em assets/passo-a-passo/.
+wizard/
