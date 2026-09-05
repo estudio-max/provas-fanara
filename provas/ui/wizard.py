@@ -235,7 +235,11 @@ class WizardDialog(QDialog):
         self.setWindowTitle(f"Primeiros passos · {recursos.PRODUCT_NAME}")
         # Não modal: a mesa de edição precisa continuar visível e utilizável atrás.
         self.setModal(False)
-        self.setMinimumSize(880, 600)
+        # Um mínimo fixo abaixo do que o conteúdo pede faz os widgets se
+        # sobreporem — foi o que aconteceu quando a primeira etapa ganhou os
+        # campos de identidade. O piso vem do próprio layout; aqui só o tamanho
+        # confortável de abertura.
+        self.resize(1040, 700)
         # Recebe o foco quando os botões desabilitam, para o anel não descer
         # sozinho até a caixa de seleção.
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -284,6 +288,9 @@ class WizardDialog(QDialog):
         self.campos.setSpacing(8)
         self.campos.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         self.campos.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        # Rótulo acima do campo, como na barra lateral: ao lado, "Fotógrafo /
+        # estúdio" disputa a largura com o próprio campo nesta coluna estreita.
+        self.campos.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         conteudo.addLayout(self.campos)
 
         conteudo.addStretch(1)

@@ -290,3 +290,24 @@ def test_o_logotipo_do_wizard_usa_o_botao_que_ja_existe(qt_app, janela):
     janela.sidebar.logo_choose_button.click = lambda: cliques.append(1)
     ACOES["escolher_logotipo"](janela)
     assert cliques == [1]
+
+
+def test_a_janela_nunca_abre_menor_do_que_a_etapa_precisa(qt_app, janela) -> None:
+    """Mínimo fixo abaixo do conteúdo faz os campos pousarem sobre os botões.
+
+    A primeira etapa ganhou três campos de identidade e passou a pedir mais
+    altura que o mínimo antigo; o defeito só aparece olhando a tela.
+    """
+    passo = WizardDialog(janela)
+    try:
+        for indice in range(len(ETAPAS)):
+            passo._indice = indice
+            passo._mostrar_etapa()
+            qt_app.processEvents()
+            pedido = passo.minimumSizeHint()
+            assert passo.width() >= pedido.width(), f"etapa {indice + 1} espremida"
+            assert passo.height() >= pedido.height(), f"etapa {indice + 1} espremida"
+    finally:
+        passo.close()
+        passo.deleteLater()
+        qt_app.processEvents()
