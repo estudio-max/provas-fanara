@@ -44,7 +44,7 @@ def test_o_passo_a_passo_cobre_o_fluxo_da_pasta_ao_pdf(qt_app: QApplication, jan
 
     assert len(ETAPAS) == 5
     assert passo.contador.text() == "Passo 1 de 5"
-    assert _rotulos_de_acao(passo) == ["Escolher pasta"]
+    assert _rotulos_de_acao(passo) == ["Escolher pasta", "Escolher logotipo"]
 
     titulos = [etapa.titulo for etapa in ETAPAS]
     assert titulos[0].startswith("Escolher")
@@ -249,3 +249,44 @@ def test_alternar_a_sombra_preserva_o_fundo(qt_app: QApplication, janela) -> Non
     chamadas.clear()
     ACOES["fundo_preto"](janela)
     assert chamadas == [("preto", False)], "trocar o fundo preserva o estado da sombra"
+
+
+def test_a_etapa_da_pasta_pede_a_identidade_e_escreve_na_barra_lateral(qt_app, janela):
+    """Preencher depois é caro: cada pausa na digitação redesenha a capa.
+
+    Na primeira etapa ainda não há prévia, então a identidade sai de graça — e
+    ela assina todas as capas.
+    """
+    from PySide6.QtWidgets import QLineEdit
+
+    passo = WizardDialog(janela)
+    try:
+        assert ETAPAS[0].campos, "a etapa da pasta precisa pedir a identidade"
+        campos = passo.campos
+        rotulos = [campos.itemAt(i, campos.ItemRole.LabelRole).widget().text()
+                   for i in range(campos.rowCount())]
+        assert rotulos == ["Título", "Fotógrafo / estúdio", "Site"]
+
+        entrada = campos.itemAt(1, campos.ItemRole.FieldRole).widget()
+        assert isinstance(entrada, QLineEdit)
+        entrada.setText("Estúdio Fanara")
+        entrada.textEdited.emit("Estúdio Fanara")
+
+        assert janela.sidebar.studio_edit.text() == "Estúdio Fanara", (
+            "o wizard tem de escrever na barra lateral, que é a fonte da verdade"
+        )
+    finally:
+        passo.close()
+        passo.deleteLater()
+        qt_app.processEvents()
+
+
+def test_o_logotipo_do_wizard_usa_o_botao_que_ja_existe(qt_app, janela):
+    """Duplicar o seletor de arquivo duplicaria a validação do logotipo."""
+    from provas.ui.wizard import ACOES
+
+    assert ("Escolher logotipo", "escolher_logotipo") in ETAPAS[0].acoes
+    cliques = []
+    janela.sidebar.logo_choose_button.click = lambda: cliques.append(1)
+    ACOES["escolher_logotipo"](janela)
+    assert cliques == [1]

@@ -22,6 +22,15 @@ from PySide6.QtWidgets import (
 )
 
 
+#: Rótulo → qualidade do motor. Nomeia a finalidade, não o número: quem exporta
+#: sabe se vai mandar por e-mail ou levar à gráfica, não que 300 dpi é o certo.
+FINALIDADES_DO_PDF = (
+    ("Web e e-mail · arquivo leve", "leve"),
+    ("Padrão · tela e impressão caseira", "normal"),
+    ("Impressão profissional · 300 dpi", "alta"),
+)
+
+
 #: Rótulo e chave de cada estilo, na ordem em que aparecem. Os três primeiros
 #: são os originais; os oito seguintes vêm do guia editorial e desenham a
 #: própria tipografia.
@@ -157,6 +166,24 @@ class WorkflowSidebar(QFrame):
         self.photo_shadow.setMinimumHeight(36)
         self.photo_shadow.toggled.connect(self._emit_page_appearance)
         layout.addWidget(self.photo_shadow)
+        layout.addSpacing(12)
+        finalidade_label = QLabel("Finalidade do PDF")
+        finalidade_label.setObjectName("fieldLabel")
+        layout.addWidget(finalidade_label)
+        layout.addSpacing(6)
+        # Só vale na exportação: a prévia é sempre leve, porque a resolução do
+        # arquivo final não muda a diagramação nem o que se vê na tela.
+        self.export_purpose = QComboBox()
+        self.export_purpose.setAccessibleName("Finalidade do PDF exportado")
+        self.export_purpose.setAccessibleDescription(
+            "Define a resolução e a compressão do arquivo exportado"
+        )
+        self.export_purpose.setMinimumHeight(36)
+        for rotulo, chave in FINALIDADES_DO_PDF:
+            self.export_purpose.addItem(rotulo, chave)
+        self.export_purpose.setCurrentIndex(1)
+        layout.addWidget(self.export_purpose)
+
         self._page_appearance_ready = False
         self._page_appearance_busy = False
         self._update_page_appearance_controls()

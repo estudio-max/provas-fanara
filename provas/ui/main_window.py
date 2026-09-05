@@ -1086,7 +1086,13 @@ class MainWindow(QMainWindow):
     def request_export(self, path: str) -> None:
         if self.project_state is None or self.is_busy:
             return
-        config = replace(self.project_state.config, saida=path)
+        # A finalidade só entra aqui: a prévia continua leve, porque a resolução
+        # do arquivo final não muda a diagramação nem o que aparece na tela.
+        config = replace(
+            self.project_state.config,
+            saida=path,
+            qualidade=self.sidebar.export_purpose.currentData() or "normal",
+        )
         self.project_state = ProjectState(
             config,
             self.project_state.plan,

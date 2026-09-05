@@ -2086,3 +2086,35 @@ def test_close_waits_asynchronously_for_active_qthreads(qapp, tmp_path: Path):
 
     assert not window.isVisible()
     assert not window._threads
+
+
+def test_a_finalidade_do_pdf_vale_so_na_exportacao(qapp):
+    """A prévia continua leve: resolução não muda diagramação nem o que se vê.
+
+    Sem isto, escolher "impressão profissional" faria a tela inteira recarregar
+    em 300 dpi para mostrar as mesmas miniaturas.
+    """
+    from provas.motor import QUALIDADES
+    from provas.ui.main_window import MainWindow
+    from provas.ui.sidebar import FINALIDADES_DO_PDF
+
+    assert all(chave in QUALIDADES for _rotulo, chave in FINALIDADES_DO_PDF)
+
+    janela = MainWindow()
+    try:
+        combo = janela.sidebar.export_purpose
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            chave for _rotulo, chave in FINALIDADES_DO_PDF
+        ]
+        assert combo.currentData() == "normal", "o padrão não pode ser o extremo"
+
+        # Trocar a finalidade não pode disparar renderização nenhuma.
+        pedidos = []
+        janela.request_preview = lambda: pedidos.append(1)
+        combo.setCurrentIndex(2)
+        qapp.processEvents()
+        assert pedidos == [], "a finalidade só vale na exportação"
+    finally:
+        janela.close()
+        janela.deleteLater()
+        qapp.processEvents()

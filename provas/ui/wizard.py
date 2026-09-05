@@ -20,9 +20,11 @@ from PySide6.QtGui import QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -50,6 +52,8 @@ class Etapa:
     ilustracao: str = ""
     #: Imagem por ação, para o exemplo acompanhar a opção apontada.
     imagens: Mapping[str, str] = field(default_factory=dict)
+    #: Rótulo → nome do campo na barra lateral. Editar aqui edita lá.
+    campos: tuple[tuple[str, str], ...] = ()
 
 
 def _tem_pasta(janela) -> bool:
@@ -127,9 +131,14 @@ ETAPAS: tuple[Etapa, ...] = (
         "Escolher a pasta do ensaio",
         "Aponte a pasta com as fotografias. JPG ou RAW — para RAW o aplicativo lê a "
         "prévia que a própria câmera gravou dentro do arquivo, sem revelar nada.",
-        (("Escolher pasta", "escolher_pasta"),),
+        (("Escolher pasta", "escolher_pasta"), ("Escolher logotipo", "escolher_logotipo")),
         _tem_pasta,
+        nota="Preencha a identidade agora: ela assina todas as capas, e aqui ainda não "
+             "há prévia para refazer a cada letra digitada.",
         ilustracao="pasta",
+        campos=(("Título", "title_edit"),
+                ("Fotógrafo / estúdio", "studio_edit"),
+                ("Site", "site_edit")),
     ),
     Etapa(
         "Para que serve este PDF?",
@@ -202,6 +211,7 @@ def _analisar(janela, modo: str) -> None:
 #: Nome da ação → o que fazer com a janela. Nada aqui reimplementa lógica.
 ACOES: dict[str, Callable[[object], None]] = {
     "escolher_pasta": lambda janela: janela.choose_folder(),
+    "escolher_logotipo": lambda janela: janela.sidebar.logo_choose_button.click(),
     "analisar_prova": lambda janela: _analisar(janela, "prova"),
     "analisar_fotolivro": lambda janela: _analisar(janela, "fotolivro"),
     "fundo_branco": lambda janela: _trocar_fundo(janela, "branco"),
@@ -268,6 +278,13 @@ class WizardDialog(QDialog):
         self.nota.setWordWrap(True)
         conteudo.addSpacing(12)
         conteudo.addWidget(self.nota)
+
+        self.campos = QFormLayout()
+        self.campos.setContentsMargins(0, 14, 0, 0)
+        self.campos.setSpacing(8)
+        self.campos.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.campos.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        conteudo.addLayout(self.campos)
 
         conteudo.addStretch(1)
         conteudo.addSpacing(14)
@@ -407,6 +424,26 @@ class WizardDialog(QDialog):
         self.descricao.setText(etapa.descricao)
         self.nota.setText(etapa.nota)
         self.nota.setVisible(bool(etapa.nota))
+
+        while self.campos.count():
+            item = self.campos.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        for rotulo, atributo in etapa.campos:
+            espelho = getattr(self.janela.sidebar, atributo, None)
+            if espelho is None:
+                continue
+            campo = QLineEdit(espelho.text())
+            campo.setAccessibleName(espelho.accessibleName() or rotulo)
+            campo.setPlaceholderText(espelho.placeholderText())
+            # A barra lateral continua sendo a fonte da verdade: escrever aqui
+            # escreve lá, e o caminho de sinal que já existe faz o resto.
+            campo.textEdited.connect(
+                lambda texto, alvo=espelho: alvo.setText(texto)
+            )
+            self.campos.addRow(rotulo, campo)
 
         while self.acoes.count():
             item = self.acoes.takeAt(0)
