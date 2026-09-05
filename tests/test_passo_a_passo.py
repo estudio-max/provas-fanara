@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from provas import app as aplicacao
 from provas import recursos
 from provas.ui import MainWindow, WizardDialog
-from provas.ui.wizard import ETAPAS
+from provas.ui.wizard import ACOES, ETAPAS
 
 
 @pytest.fixture
@@ -88,7 +88,12 @@ def test_a_etapa_de_escolha_nao_trava_o_avanco(qt_app: QApplication, janela) -> 
 
     assert ETAPAS[3].opcional
     assert passo.avancar.isEnabled()
-    assert _rotulos_de_acao(passo) == ["Clássica", "Mosaico", "Curvas editoriais"]
+    from provas.ui.sidebar import ESTILOS_DE_CAPA
+
+    # Os rótulos vêm da barra lateral; fixá-los aqui foi o que deixou o guia
+    # oferecendo três capas depois que o aplicativo passou a ter onze.
+    assert _rotulos_de_acao(passo) == [rotulo.split(" · ")[0]
+                                       for rotulo, _chave in ESTILOS_DE_CAPA]
     passo.deleteLater()
 
 
@@ -102,7 +107,7 @@ def test_cada_acao_chama_a_funcao_real_da_mesa_de_edicao(qt_app: QApplication, j
 
     passo = WizardDialog(janela)
     for acao in ("escolher_pasta", "analisar_prova", "analisar_fotolivro",
-                 "capa_classica", "capa_mosaico", "capa_curvas", "exportar"):
+                 "capa_classica", "capa_mosaico", "capa_curvas_editoriais", "exportar"):
         passo._executar(acao)
 
     assert chamadas == [
@@ -180,7 +185,12 @@ def test_a_escolha_ativa_fica_marcada_na_tela(qt_app: QApplication, janela) -> N
     passo._sincronizar()
 
     marcados = [b.text() for b in passo._botoes_acao if b.property("ativo")]
-    assert marcados == ["Mosaico"], "a capa em uso tem de aparecer marcada"
+    from provas.ui.sidebar import ESTILOS_DE_CAPA
+
+    rotulo_mosaico = next(rotulo for rotulo, chave in ESTILOS_DE_CAPA if chave == "mosaico")
+    assert marcados == [rotulo_mosaico.split(" · ")[0]], (
+        "a capa em uso tem de aparecer marcada"
+    )
     passo.deleteLater()
 
 
@@ -311,3 +321,41 @@ def test_a_janela_nunca_abre_menor_do_que_a_etapa_precisa(qt_app, janela) -> Non
         passo.close()
         passo.deleteLater()
         qt_app.processEvents()
+
+
+def test_o_passo_a_passo_oferece_todos_os_estilos_de_capa(qt_app, janela) -> None:
+    """Fixar a lista aqui deixou o guia oferecendo três capas de onze.
+
+    Quem seguia o passo a passo nunca via as outras oito — elas só existiam na
+    barra lateral. A lista tem de vir da mesma fonte, não de uma cópia.
+    """
+    from provas.capas import COVER_STYLES
+
+    passo = WizardDialog(janela)
+    try:
+        etapa = next(i for i, e in enumerate(ETAPAS) if e.titulo == "Estilo da capa")
+        passo._indice = etapa
+        passo._mostrar_etapa()
+        qt_app.processEvents()
+
+        acoes = [passo._acao_do_botao[botao] for botao in passo._botoes_acao]
+        assert acoes == [f"capa_{estilo}" for estilo in COVER_STYLES]
+        for acao in acoes:
+            assert acao in ACOES, f"{acao} tem botão mas não tem ação"
+    finally:
+        passo.close()
+        passo.deleteLater()
+        qt_app.processEvents()
+
+
+def test_cada_estilo_de_capa_tem_ilustracao_empacotada() -> None:
+    """Botão sem exemplo deixa a etapa muda justamente onde ela mais ensina."""
+    from provas.capas import COVER_STYLES
+    from provas import recursos
+
+    etapa = next(e for e in ETAPAS if e.titulo == "Estilo da capa")
+    for estilo in COVER_STYLES:
+        nome = etapa.imagens[f"capa_{estilo}"]
+        assert recursos.caminho(f"passo-a-passo/{nome}.jpg").is_file(), (
+            f"falta a ilustração de {estilo}"
+        )

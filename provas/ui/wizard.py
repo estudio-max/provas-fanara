@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import recursos
+from .sidebar import ESTILOS_DE_CAPA
 
 
 @dataclass(frozen=True)
@@ -77,16 +79,21 @@ def _modo_atual(janela) -> frozenset[str]:
     return frozenset({"analisar_prova" if prova else "analisar_fotolivro"})
 
 
+#: Os estilos vêm da barra lateral, que por sua vez espelha o motor. Fixar a
+#: lista aqui deixou o passo a passo oferecendo três capas enquanto o aplicativo
+#: já tinha onze — quem seguia o guia nunca via as outras oito.
+def _acao_da_capa(estilo: str) -> str:
+    return f"capa_{estilo}"
+
+
 def _capa_atual(janela) -> frozenset[str]:
     estado = getattr(janela, "project_state", None)
     if estado is None:
         return frozenset()
-    nome = {
-        "classica": "capa_classica",
-        "mosaico": "capa_mosaico",
-        "curvas_editoriais": "capa_curvas",
-    }.get(estado.config.estilo_capa, "")
-    return frozenset({nome}) if nome else frozenset()
+    estilo = estado.config.estilo_capa
+    if estilo not in {chave for _rotulo, chave in ESTILOS_DE_CAPA}:
+        return frozenset()
+    return frozenset({_acao_da_capa(estilo)})
 
 
 def _acabamento_atual(janela) -> frozenset[str]:
@@ -171,19 +178,18 @@ ETAPAS: tuple[Etapa, ...] = (
     Etapa(
         "Estilo da capa",
         "Clássica usa uma fotografia com título e estúdio. Mosaico compõe a grade com "
-        "o ensaio inteiro. Curvas editoriais organiza as fotos em formas orgânicas ao "
-        "redor do título.",
-        (("Clássica", "capa_classica"),
-         ("Mosaico", "capa_mosaico"),
-         ("Curvas editoriais", "capa_curvas")),
+        "o ensaio inteiro. As demais são editoriais: cada uma com sua tipografia e "
+        "com a cor de fundo tirada da própria fotografia. Aponte para ver o exemplo.",
+        tuple((rotulo.split(" · ")[0], _acao_da_capa(chave))
+              for rotulo, chave in ESTILOS_DE_CAPA),
         _tem_previa,
         opcional=True,
-        nota="Trocar a capa refaz a prévia e leva alguns segundos. As páginas não são "
-             "redesenhadas, só a capa.",
+        nota="Trocar a capa refaz só a capa; as páginas não são redesenhadas. O nome do "
+             "fotógrafo e o site assinam todas elas.",
         escolha_atual=_capa_atual,
         ilustracao="capa-classica",
-        imagens={"capa_classica": "capa-classica", "capa_mosaico": "capa-mosaico",
-                 "capa_curvas": "capa-curvas"},
+        imagens={_acao_da_capa(chave): f"capa-{chave}"
+                 for _rotulo, chave in ESTILOS_DE_CAPA},
     ),
     Etapa(
         "Exportar o PDF",
@@ -218,9 +224,8 @@ ACOES: dict[str, Callable[[object], None]] = {
     "fundo_cinza": lambda janela: _trocar_fundo(janela, "cinza"),
     "fundo_preto": lambda janela: _trocar_fundo(janela, "preto"),
     "sombra": _alternar_sombra,
-    "capa_classica": lambda janela: janela.set_cover_style("classica"),
-    "capa_mosaico": lambda janela: janela.set_cover_style("mosaico"),
-    "capa_curvas": lambda janela: janela.set_cover_style("curvas_editoriais"),
+    **{_acao_da_capa(chave): (lambda janela, estilo=chave: janela.set_cover_style(estilo))
+       for _rotulo, chave in ESTILOS_DE_CAPA},
     "exportar": lambda janela: janela.export_dialog(),
 }
 
@@ -295,9 +300,12 @@ class WizardDialog(QDialog):
 
         conteudo.addStretch(1)
         conteudo.addSpacing(14)
-        self.acoes = QHBoxLayout()
+        # Grade, não linha: a etapa da capa oferece onze estilos, e em fila eles
+        # espremiam os rótulos até virarem reticências.
+        self.acoes = QGridLayout()
         self.acoes.setContentsMargins(0, 0, 0, 0)
-        self.acoes.setSpacing(8)
+        self.acoes.setHorizontalSpacing(8)
+        self.acoes.setVerticalSpacing(8)
         conteudo.addLayout(self.acoes)
 
         self.aguarde = QLabel()
@@ -463,16 +471,21 @@ class WizardDialog(QDialog):
         self._botoes_acao.clear()
         self._acao_do_botao.clear()
 
-        for rotulo, acao in etapa.acoes:
+        colunas = 3 if len(etapa.acoes) > 4 else max(1, len(etapa.acoes))
+        for indice, (rotulo, acao) in enumerate(etapa.acoes):
             botao = QPushButton(rotulo)
             botao.setObjectName("wizardAction")
             botao.clicked.connect(lambda _c=False, nome=acao: self._executar(nome))
             # Apontar um botão troca o exemplo, sem precisar clicar.
             botao.installEventFilter(self)
-            self.acoes.addWidget(botao)
+            self.acoes.addWidget(botao, indice // colunas, indice % colunas)
             self._botoes_acao.append(botao)
             self._acao_do_botao[botao] = acao
-        self.acoes.addStretch(1)
+        for coluna in range(colunas):
+            self.acoes.setColumnStretch(coluna, 1)
+        # Colunas sobrando de uma etapa anterior empurrariam os botões desta.
+        for coluna in range(colunas, 4):
+            self.acoes.setColumnStretch(coluna, 0)
 
         self.voltar.setEnabled(self._indice > 0)
         self._ilustracao_fixada = ""
