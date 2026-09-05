@@ -14,6 +14,35 @@ As capturas de tela e os logotipos já estão versionados em `site/store/`.
 
 ---
 
+## Produto MSIX novo — o que já está feito
+
+Criado em 5 de setembro de 2026, depois de liberar o nome do produto Win32.
+
+| | |
+|---|---|
+| Nome | Fanara Fotolivro |
+| Tipo | MSIX or PWA app |
+| Store ID | `9NM0LV9V135F` |
+| URL | https://apps.microsoft.com/detail/9NM0LV9V135F |
+| Package/Identity/Name | `EstdioFanara.FanaraFotolivro` |
+| Package/Identity/Publisher | `CN=12E00B3F-F6C2-4C38-A1D8-F1E54FE1BCAA` |
+| PublisherDisplayName | `Estúdio Fanara` |
+
+Os três valores de identidade já estão em `empacotar_msix.py`, e o pacote
+`dist/Fanara - Fotolivro-1.0.4.0-x64.msix` foi gerado com eles.
+
+O nome reservado **expira em três meses** se a submissão não for enviada.
+
+### O que falta na submissão
+
+1. **Pacotes** — arrastar o `.msix` (148 MB). É o único passo que exige a mão
+   humana: o upload por automação tem teto de 10 MB.
+2. **Preço e disponibilidade** — preço base **Grátis**; o resto já vem no
+   padrão certo (240 mercados, público, descobrível).
+3. **Propriedades**, **Classificação etária** e **Listagem** — os valores estão
+   abaixo neste arquivo.
+
+
 ## Disponibilidade
 
 | | |
