@@ -98,6 +98,73 @@ def _quebrar(
     return inteiras
 
 
+def _fonte_de_apoio(
+    desenho: ImageDraw.ImageDraw,
+    texto: str,
+    origem: tema.Fonte,
+    corpo: int,
+    limite: int,
+    minimo: int = 8,
+) -> ImageFont.ImageFont:
+    """Corpo da linha de apoio que faz a maior parte caber inteira na coluna.
+
+    Um nome de estúdio ou um endereço de site é indivisível na leitura. Numa
+    coluna estreita ele quebrava no meio; ceder um ponto ou dois de corpo lê
+    melhor do que partir o nome de quem assina o trabalho.
+    """
+    fonte = _fonte(origem, corpo)
+    partes = [parte.strip() for parte in (texto or "").split("·") if parte.strip()]
+    if not partes:
+        return fonte
+    maior = max(partes, key=lambda parte: desenho.textlength(parte, font=fonte))
+    while corpo > minimo and desenho.textlength(maior, font=fonte) > limite:
+        corpo -= 1
+        fonte = _fonte(origem, corpo)
+    return fonte
+
+
+def _linhas_de_apoio(
+    desenho: ImageDraw.ImageDraw,
+    texto: str,
+    fonte: ImageFont.ImageFont,
+    limite: int,
+    entreletra: float = 0.0,
+) -> list[str]:
+    """Quebra a linha de apoio entre as suas partes, nunca no meio de uma.
+
+    Data, fotógrafo e site são três coisas, não um parágrafo. Quebrando a string
+    inteira como texto corrido, o separador sobrava pendurado no fim da linha e
+    o nome do estúdio partia ao meio — foi assim que o crédito saiu na primeira
+    versão. Só uma parte que sozinha não cabe na coluna volta a ceder por palavra.
+    """
+    partes = [parte.strip() for parte in (texto or "").split("·") if parte.strip()]
+    if not partes:
+        return []
+
+    def largura(frase: str) -> float:
+        base = desenho.textlength(frase, font=fonte)
+        return base + fonte.size * entreletra * max(0, len(frase) - 1)
+
+    linhas: list[str] = []
+    atual = ""
+    for parte in partes:
+        if atual and largura(f"{atual} · {parte}") <= limite:
+            atual = f"{atual} · {parte}"
+            continue
+        if atual:
+            linhas.append(atual)
+            atual = ""
+        if largura(parte) > limite:
+            pedacos = _quebrar(desenho, parte, fonte, limite, entreletra)
+            linhas.extend(pedacos[:-1])
+            atual = pedacos[-1] if pedacos else ""
+        else:
+            atual = parte
+    if atual:
+        linhas.append(atual)
+    return linhas
+
+
 def _apoio(subtitulo: str, credito: str) -> str:
     """Junta subtítulo e crédito numa linha só de apoio.
 
@@ -244,9 +311,10 @@ def jornada(
 
     subtitulo = (subtitulo or "").strip()
     if subtitulo:
-        fonte_sub = _fonte(tipografia.subtitulo, _pt(15, altura))
+        fonte_sub = _fonte_de_apoio(desenho, subtitulo, tipografia.subtitulo,
+                                    _pt(15, altura), coluna)
         y += round(fonte_titulo.size * 0.55)
-        for linha in _quebrar(desenho, subtitulo, fonte_sub, coluna):
+        for linha in _linhas_de_apoio(desenho, subtitulo, fonte_sub, coluna):
             _escrever(desenho, linha, fonte_sub, (margem, y), (92, 94, 102))
             y += _entrelinha(fonte_sub, 1.35)
 
@@ -329,7 +397,7 @@ def toscana(foto, largura, altura, titulo, subtitulo="", credito="", tipografia=
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(15, altura))
         y += round(fonte.size * 0.28)
-        for linha in _quebrar(desenho, subtitulo.strip(), fonte_sub, round(largura * 0.66)):
+        for linha in _linhas_de_apoio(desenho, subtitulo, fonte_sub, round(largura * 0.66)):
             comprimento = desenho.textlength(linha, font=fonte_sub)
             _escrever(desenho, linha, fonte_sub,
                       (round((largura - comprimento) / 2), y), (104, 100, 94))
@@ -411,7 +479,7 @@ def fluir(foto, largura, altura, titulo, subtitulo="", credito="", tipografia=No
                               limite, tipografia.titulo_entreletra)
     topo = round(altura * 0.16)
     fonte_sub = _fonte(tipografia.subtitulo, _pt(14, altura))
-    linhas_sub = _quebrar(desenho, subtitulo, fonte_sub, limite) if subtitulo else []
+    linhas_sub = _linhas_de_apoio(desenho, subtitulo, fonte_sub, limite) if subtitulo else []
 
     # O véu é medido pelo texto, não chutado: o bloco cresce com o crédito, e o
     # quadrante calmo foi escolhido olhando só a metade de cima. Chapado onde as
@@ -538,7 +606,7 @@ def fragmentos(fotos, largura, altura, titulo, subtitulo="", credito="", tipogra
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(16, altura))
         y += round(fonte.size * 0.3)
-        for linha in _quebrar(desenho, subtitulo.strip(), fonte_sub, limite):
+        for linha in _linhas_de_apoio(desenho, subtitulo, fonte_sub, limite):
             _escrever(desenho, linha, fonte_sub, (x, y), (108, 104, 98))
             y += _entrelinha(fonte_sub, 1.32)
     return Composta(tela)
@@ -578,17 +646,11 @@ def contrastes(fotos, largura, altura, titulo, subtitulo="", credito="", tipogra
     # O subtítulo divide a faixa com o título: mede-se primeiro, para o título
     # ceder corpo em vez de descer por cima dele.
     x_faixa = largura - faixa_texto + round(faixa_texto * 0.1)
+    # A faixa é estreita de propósito, e o crédito precisa caber nela inteiro.
     limite_faixa = faixa_texto - round(faixa_texto * 0.2)
-    corpo_sub = _pt(13, altura)
-    fonte_sub = _fonte(tipografia.subtitulo, corpo_sub)
-    # A faixa é estreita de propósito. Com o crédito, a maior palavra costuma
-    # ser o endereço do site: o corpo cede até ele caber inteiro.
-    if (subtitulo or "").strip():
-        maior = max(subtitulo.split(), key=len)
-        while corpo_sub > 7 and desenho.textlength(maior, font=fonte_sub) > limite_faixa:
-            corpo_sub -= 1
-            fonte_sub = _fonte(tipografia.subtitulo, corpo_sub)
-    linhas_sub = (_quebrar(desenho, subtitulo.strip(), fonte_sub, limite_faixa)
+    fonte_sub = _fonte_de_apoio(desenho, subtitulo, tipografia.subtitulo,
+                                _pt(13, altura), limite_faixa, minimo=7)
+    linhas_sub = (_linhas_de_apoio(desenho, subtitulo, fonte_sub, limite_faixa)
                   if (subtitulo or "").strip() else [])
     pe = sum(_entrelinha(fonte_sub, 1.3) for _ in linhas_sub)
     if pe:
@@ -645,7 +707,7 @@ def caminho(fotos, largura, altura, titulo, subtitulo="", credito="", tipografia
     if (subtitulo or "").strip():
         fonte_sub = _fonte(tipografia.subtitulo, _pt(18, altura))
         y += round(fonte.size * 0.26)
-        for linha in _quebrar(desenho, subtitulo.strip(), fonte_sub, round(largura * 0.7)):
+        for linha in _linhas_de_apoio(desenho, subtitulo, fonte_sub, round(largura * 0.7)):
             comprimento = desenho.textlength(linha, font=fonte_sub)
             _escrever(desenho, linha, fonte_sub,
                       (round((largura - comprimento) / 2), y), (96, 90, 82))

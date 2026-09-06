@@ -153,3 +153,55 @@ def test_estilo_editorial_sem_identidade_falha_claro() -> None:
 
     with pytest.raises(ValueError, match="exige os dados de identidade"):
         capas.gerar("jornada", _fotos(), LARGURA, ALTURA, None)
+
+
+def _regua():
+    from PIL import ImageDraw
+    return ImageDraw.Draw(Image.new("L", (1, 1)))
+
+
+def test_a_linha_de_apoio_quebra_entre_as_partes_e_nao_dentro_delas() -> None:
+    """Data, fotógrafo e site são três coisas, não um parágrafo.
+
+    Quebrando como texto corrido, o separador sobrava pendurado no fim da linha
+    e o nome do estúdio partia ao meio — foi assim que o crédito saiu na capa.
+    """
+    from provas.capas_editoriais import _fonte, _linhas_de_apoio
+    from provas.tipografia_capas import par
+
+    fonte = _fonte(par("geometrico").subtitulo, 15)
+    texto = "05.09.2026 · João Fanara / Estúdio Fanara · www.fanara.com.br"
+    linhas = _linhas_de_apoio(_regua(), texto, fonte, 150)
+
+    assert linhas, "a linha de apoio não pode sumir"
+    for linha in linhas:
+        assert not linha.rstrip().endswith("·"), f"separador pendurado em {linha!r}"
+        assert not linha.lstrip().startswith("·"), f"separador órfão em {linha!r}"
+    # Nenhuma parte pode ser cortada ao meio quando ela caberia inteira.
+    assert "www.fanara.com.br" in linhas
+    assert "05.09.2026" in " ".join(linhas)
+
+
+def test_a_linha_de_apoio_cabe_numa_linha_quando_a_coluna_permite() -> None:
+    from provas.capas_editoriais import _fonte, _linhas_de_apoio
+    from provas.tipografia_capas import par
+
+    fonte = _fonte(par("geometrico").subtitulo, 15)
+    linhas = _linhas_de_apoio(_regua(), "2026 · Estúdio Fanara", fonte, 4000)
+
+    assert linhas == ["2026 · Estúdio Fanara"], "coluna larga não deve quebrar nada"
+
+
+def test_o_corpo_do_apoio_cede_para_o_nome_nao_partir() -> None:
+    """Ceder um ponto lê melhor que partir o nome de quem assina o trabalho."""
+    from provas.capas_editoriais import _fonte_de_apoio
+    from provas.tipografia_capas import par
+
+    origem = par("geometrico").subtitulo
+    texto = "05.09.2026 · João Fanara / Estúdio Fanara · www.fanara.com.br"
+    largo = _fonte_de_apoio(_regua(), texto, origem, 15, 4000)
+    estreito = _fonte_de_apoio(_regua(), texto, origem, 15, 150)
+
+    assert largo.size == 15, "coluna larga não precisa encolher"
+    assert estreito.size < 15, "coluna estreita tem de ceder corpo"
+    assert estreito.size >= 8, "não pode encolher a ponto de sumir"
