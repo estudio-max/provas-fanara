@@ -282,7 +282,8 @@ class Documento:
                  rodape: str = "", nota_capa: str = "", estudio: str = "",
                  site: str = "", paleta: tema.Paleta | None = None,
                  modo: str = "prova", paleta_capa: tema.Paleta | None = None,
-                 sombra_fotos: bool = False) -> None:
+                 sombra_fotos: bool = False, rodape_credito: bool = False,
+                 total_paginas: int = 0) -> None:
         if modo not in {"prova", "fotolivro"}:
             raise ValueError(f"Unsupported mode: {modo}")
         self.pdf = pymupdf.open()
@@ -293,6 +294,8 @@ class Documento:
         self.p = paleta or tema.paleta()
         self.p_capa = paleta_capa or self.p
         self.sombra_fotos = bool(sombra_fotos)
+        self.rodape_credito = bool(rodape_credito)
+        self.total_paginas = int(total_paginas)
         self.titulo = titulo
         self.subtitulo = subtitulo
         self.paisagem = paisagem
@@ -397,7 +400,33 @@ class Documento:
                 NOME_SANS_MEDIO, font_size, self.p.apagado, tracking,
                 "centro",
             )
+        self._assinatura_do_rodape(page, page_plan.number)
         return page
+
+    def _assinatura_do_rodape(self, pagina: pymupdf.Page, numero: int) -> None:
+        """Autor, site e número no pé da página, discretos a ponto de sumir.
+
+        Sem filete e no tom apagado da paleta: a página é da fotografia, e a
+        assinatura só precisa estar lá para quem procurar. Nada é desenhado
+        quando não há o que assinar.
+        """
+        if not self.rodape_credito:
+            return
+        largura, altura = self.tamanho
+        base = altura - tema.MARGEM_LATERAL * 0.55
+        corpo = 6.0
+        autor = (self.estudio or "").strip()
+        site = (self.site or "").strip()
+        assinatura = " · ".join(parte for parte in (autor, site) if parte)
+        if assinatura:
+            self.tipo.escrever(pagina, tema.MARGEM_LATERAL, base, assinatura,
+                               NOME_SANS_MEDIO, corpo, self.p.apagado, 0.4)
+        if numero > 0:
+            direita = largura - tema.MARGEM_LATERAL
+            contagem = (f"{numero:02d} / {self.total_paginas:02d}"
+                        if self.total_paginas > 0 else f"{numero:02d}")
+            self.tipo.escrever(pagina, direita, base, contagem,
+                               NOME_SANS_MEDIO, corpo, self.p.apagado, 0.4, "dir")
 
     # cabeçalho e rodapé -------------------------------------------------
     def moldura(self, pagina: pymupdf.Page, numero: int, total: int) -> None:

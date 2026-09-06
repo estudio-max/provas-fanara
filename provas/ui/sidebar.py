@@ -57,7 +57,7 @@ class WorkflowSidebar(QFrame):
     crop_requested = Signal()
     cover_style_changed = Signal(str)
     cover_identity_changed = Signal(dict)
-    page_appearance_changed = Signal(str, bool)
+    page_appearance_changed = Signal(str, bool, bool)
     cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -166,6 +166,14 @@ class WorkflowSidebar(QFrame):
         self.photo_shadow.setMinimumHeight(36)
         self.photo_shadow.toggled.connect(self._emit_page_appearance)
         layout.addWidget(self.photo_shadow)
+        self.page_credit = QCheckBox("Assinatura no rodapé das páginas")
+        self.page_credit.setAccessibleName("Assinatura no rodapé das páginas")
+        self.page_credit.setAccessibleDescription(
+            "Fotógrafo, site e número da página, discretos no pé de cada página"
+        )
+        self.page_credit.setMinimumHeight(36)
+        self.page_credit.toggled.connect(self._emit_page_appearance)
+        layout.addWidget(self.page_credit)
         layout.addSpacing(12)
         finalidade_label = QLabel("Finalidade do PDF")
         finalidade_label.setObjectName("fieldLabel")
@@ -311,7 +319,9 @@ class WorkflowSidebar(QFrame):
 
     def _emit_page_appearance(self, *_args: object) -> None:
         self.page_appearance_changed.emit(
-            str(self.page_background.currentData()), self.photo_shadow.isChecked()
+            str(self.page_background.currentData()),
+            self.photo_shadow.isChecked(),
+            self.page_credit.isChecked(),
         )
 
     def _identity_payload(self) -> dict[str, str]:
@@ -373,7 +383,7 @@ class WorkflowSidebar(QFrame):
         self.logo_remove_button.setEnabled(bool(self.logo_path))
 
     def set_page_appearance(
-        self, background: str, shadow: bool, *, emit: bool = False
+        self, background: str, shadow: bool, credit: bool = False, *, emit: bool = False
     ) -> None:
         index = self.page_background.findData(background)
         if index < 0:
@@ -381,11 +391,14 @@ class WorkflowSidebar(QFrame):
         blockers = (
             self.page_background.blockSignals(True),
             self.photo_shadow.blockSignals(True),
+            self.page_credit.blockSignals(True),
         )
         self.page_background.setCurrentIndex(index)
         self.photo_shadow.setChecked(bool(shadow))
+        self.page_credit.setChecked(bool(credit))
         self.page_background.blockSignals(blockers[0])
         self.photo_shadow.blockSignals(blockers[1])
+        self.page_credit.blockSignals(blockers[2])
         if emit:
             self._emit_page_appearance()
 
@@ -478,3 +491,4 @@ class WorkflowSidebar(QFrame):
         available = self._page_appearance_ready and not self._page_appearance_busy
         self.page_background.setEnabled(available)
         self.photo_shadow.setEnabled(available)
+        self.page_credit.setEnabled(available)

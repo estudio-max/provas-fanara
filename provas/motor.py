@@ -66,6 +66,10 @@ class Config:
     cor_fundo: str = tema.FUNDO_PADRAO
     fundo_paginas: str = "branco"
     sombra_fotos: bool = False
+    #: Assinatura discreta no pé de cada página interna: autor, site e número.
+    #: Desligado por padrão — ligá-lo muda todas as páginas, e projeto antigo
+    #: tem de continuar exportando o mesmo PDF.
+    rodape_credito: bool = False
     recursivo: bool = False
     capa_mosaico: bool = True
     estilo_capa: str = "classica"
@@ -84,6 +88,7 @@ class Config:
         self.cover_ids = tuple(self.cover_ids)
         tema.paleta_paginas(self.fundo_paginas)
         self.sombra_fotos = bool(self.sombra_fotos)
+        self.rodape_credito = bool(self.rodape_credito)
 
     def com_padroes(self) -> "Config":
         """Preenche título, subtítulo e caminho de saída a partir da pasta."""
@@ -497,7 +502,8 @@ def ciclar_preview_pagina(
         page_number,
         assets,
         preview_width,
-        document_factory=lambda: _new_editorial_document(config, cycled_plan.mode),
+        document_factory=lambda: _new_editorial_document(
+            config, cycled_plan.mode, len(cycled_plan.pages)),
         style_fingerprint=render_style_fingerprint(config, cycled_plan.mode, cycled_plan.seed),
     )
     if _cancelled(cancelar):
@@ -540,7 +546,8 @@ def _logo_document(
             logo.close()
 
 
-def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
+def _new_editorial_document(config: Config, mode: str,
+                            total_paginas: int = 0) -> documento.Documento:
     logo, logo_ratio, cover_palette, warnings = _logo_document(config)
     page_palette = tema.paleta_paginas(config.fundo_paginas)
     result = documento.Documento(
@@ -557,6 +564,8 @@ def _new_editorial_document(config: Config, mode: str) -> documento.Documento:
         paleta_capa=cover_palette,
         sombra_fotos=config.sombra_fotos,
         modo=mode,
+        rodape_credito=config.rodape_credito,
+        total_paginas=total_paginas,
     )
     result.cover_warnings = warnings
     return result
@@ -592,6 +601,11 @@ def render_style_fingerprint(config: Config, mode: str, seed: int) -> tuple[obje
         # Corpo da página.
         config.fundo_paginas,
         config.sombra_fotos,
+        # Com o rodapé ligado o site passa a desenhar todas as páginas; ele só
+        # entra aqui nesse caso, senão digitar o endereço voltaria a recarregar
+        # a sessão inteira a cada pausa.
+        config.rodape_credito,
+        config.site if config.rodape_credito else "",
         config.qualidade,
         config.marca_dagua,
         config.marca_opacidade,
@@ -651,7 +665,8 @@ def gerar_preview(
                 page_plan.number,
                 assets,
                 width,
-                document_factory=lambda: _new_editorial_document(config, plan.mode),
+                document_factory=lambda: _new_editorial_document(
+                    config, plan.mode, len(plan.pages)),
                 style_fingerprint=style_fingerprint,
             )
         )
@@ -879,7 +894,7 @@ def exportar(
     cover_warnings: tuple[CoverWarning, ...] = ()
     cover_created = False
     try:
-        doc = _new_editorial_document(config, plan.mode)
+        doc = _new_editorial_document(config, plan.mode, len(plan.pages))
         cover_rendered = _render_cover(
             doc, config, plan, {photo.id: photo for photo in analysis.photos},
         )

@@ -323,14 +323,20 @@ def test_cover_identity_waits_for_typing_pause_before_requesting_preview(qapp):
     identities: list[dict[str, str]] = []
     sidebar.cover_identity_changed.connect(identities.append)
 
+    # Derivado do próprio debounce: fixar milissegundos aqui fazia o teste virar
+    # corrida quando o intervalo mudou, e ele passava ou falhava por sorte.
+    espera = sidebar._identity_timer.interval()
+
     for partial_title in ("E", "En", "Ens"):
         sidebar.title_edit.setText(partial_title)
-        QTest.qWait(300)
+        QTest.qWait(max(10, espera // 3))
 
-    assert identities == []
+    assert identities == [], "digitação corrida não pode disparar a prévia"
 
-    QTest.qWait(850)
-    assert [identity["titulo"] for identity in identities] == ["Ens"]
+    QTest.qWait(espera + 250)
+    assert [identity["titulo"] for identity in identities] == ["Ens"], (
+        "a pausa deliberada emite uma vez, com o texto final"
+    )
 
 
 def test_switching_cover_style_rerenders_only_cover_and_preserves_album(
@@ -1310,9 +1316,10 @@ def test_page_cycle_page_appearance_uses_the_latest_pending_value(qapp, plan, mo
     monkeypatch.setattr(window, "_start_page_cycle_worker", start)
     window.request_page_cycle(1)
     window.set_page_appearance("cinza", True)
-    window.set_page_appearance("preto", True)
+    window.set_page_appearance("preto", True, True)
 
-    assert window._deferred_page_appearance == ("preto", True)
+    # A aparência guardada leva os três controles: fundo, sombra e rodapé.
+    assert window._deferred_page_appearance == ("preto", True, True)
 
     window._page_cycle_cancelled()
 
@@ -2183,6 +2190,39 @@ def test_o_titulo_herdado_da_pasta_anterior_cede_para_a_nova(qapp, tmp_path):
         janela.select_folder(str(segunda))
         qapp.processEvents()
         assert janela.sidebar.title_edit.text() == "Casamento Ana"
+    finally:
+        janela.close()
+        janela.deleteLater()
+        qapp.processEvents()
+
+
+def test_o_rodape_das_paginas_e_opcional_e_atravessa_ate_o_config(qapp, tmp_path):
+    """Assinatura no pé: opcional, desligada por padrão, e salva no projeto.
+
+    Ligá-la muda todas as páginas internas — um projeto antigo tem de continuar
+    exportando o mesmo PDF, então o padrão é desligado.
+    """
+    from provas.motor import Config
+    from provas.projeto import ProjectConfig
+    from provas.ui.main_window import MainWindow
+
+    assert Config(str(tmp_path)).com_padroes().rodape_credito is False
+    assert ProjectConfig(pasta=str(tmp_path)).rodape_credito is False
+
+    janela = MainWindow()
+    try:
+        assert janela.sidebar.page_credit.isChecked() is False
+
+        emitidos: list[tuple] = []
+        janela.sidebar.page_appearance_changed.connect(
+            lambda fundo, sombra, rodape: emitidos.append((fundo, sombra, rodape))
+        )
+        janela.sidebar.page_credit.setChecked(True)
+        qapp.processEvents()
+
+        assert emitidos and emitidos[-1][2] is True, (
+            "marcar a caixa tem de chegar como terceiro valor do sinal"
+        )
     finally:
         janela.close()
         janela.deleteLater()

@@ -52,6 +52,7 @@ class ProjectConfig:
     cor_fundo: str = "#F6F0E8"
     fundo_paginas: str = "branco"
     sombra_fotos: bool = False
+    rodape_credito: bool = False
     recursivo: bool = False
     capa_mosaico: bool = True
     estilo_capa: str = "classica"
@@ -70,6 +71,7 @@ class ProjectConfig:
         object.__setattr__(self, "cover_ids", tuple(self.cover_ids))
         tema.paleta_paginas(self.fundo_paginas)
         object.__setattr__(self, "sombra_fotos", bool(self.sombra_fotos))
+        object.__setattr__(self, "rodape_credito", bool(self.rodape_credito))
         object.__setattr__(self, "estilo_capa", validate_cover_style(self.estilo_capa))
         object.__setattr__(self, "capa_foco_x", min(1.0, max(0.0, float(self.capa_foco_x))))
         object.__setattr__(self, "capa_foco_y", min(1.0, max(0.0, float(self.capa_foco_y))))
@@ -241,6 +243,8 @@ def _migrate_project(data: object) -> dict[str, object]:
     if version == 3:
         migrated_config.setdefault("fundo_paginas", "branco")
         migrated_config.setdefault("sombra_fotos", False)
+        # Projeto salvo antes do rodapé abre sem ele, exportando o mesmo PDF.
+        migrated_config.setdefault("rodape_credito", False)
         version = 4
     migrated["config"] = migrated_config
     migrated["schema_version"] = version

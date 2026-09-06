@@ -1011,3 +1011,56 @@ def test_capa_editorial_recebe_a_resolucao_que_vai_ser_impressa(estilo, tmp_path
         assert max(largura, altura) >= max(alvo[1], alvo[2]), (
             f"{estilo} recebeu {largura}x{altura} para uma capa {alvo[1]}x{alvo[2]}"
         )
+
+
+def test_o_rodape_desenha_assinatura_e_numero_so_quando_ligado(tmp_path, image_factory):
+    """A página é da fotografia; a assinatura só aparece quando pedida."""
+    from dataclasses import replace as _replace
+
+    from PIL import ImageChops
+
+    from provas import motor
+
+    for indice in range(4):
+        image_factory(f"foto-{indice}.jpg", size=(300, 450))
+    motor.limpar_cache_de_ativos()
+    config = motor.Config(
+        str(tmp_path), estudio="Estúdio Fanara", site="fanara.com.br",
+        modo="fotolivro", marca_dagua=False, mostrar_codigos=False,
+        qualidade="leve", semente=11,
+    ).com_padroes()
+    plano = motor.analisar_plano(config).plan
+
+    sem = list(motor.gerar_preview(config, plano, width=420))[1:]
+    com = list(motor.gerar_preview(_replace(config, rodape_credito=True), plano, width=420))[1:]
+
+    assert sem and len(sem) == len(com)
+    for numero, (a, b) in enumerate(zip(sem, com), start=2):
+        assert ImageChops.difference(a.convert("RGB"), b.convert("RGB")).getbbox(), (
+            f"o rodapé não apareceu na página {numero}"
+        )
+
+
+def test_o_rodape_entra_na_impressao_digital_e_leva_o_site_junto(tmp_path):
+    """Com o rodapé ligado o site desenha as páginas; desligado, não.
+
+    Sem essa distinção, ou a prévia mente com o rodapé ligado, ou digitar o
+    endereço volta a recarregar a sessão inteira com ele desligado.
+    """
+    from dataclasses import replace as _replace
+
+    from provas.motor import Config, render_style_fingerprint
+
+    base = Config(str(tmp_path), estudio="Estúdio", site="fanara.com.br").com_padroes()
+    ligado = _replace(base, rodape_credito=True)
+
+    def impressao(config):
+        return render_style_fingerprint(config, "fotolivro", 7)
+
+    assert impressao(base) != impressao(ligado), "ligar o rodapé muda a página"
+    assert impressao(base) == impressao(_replace(base, site="outro.com.br")), (
+        "desligado, o site não desenha nada e não pode invalidar o cache"
+    )
+    assert impressao(ligado) != impressao(_replace(ligado, site="outro.com.br")), (
+        "ligado, o site desenha o rodapé e tem de invalidar"
+    )
